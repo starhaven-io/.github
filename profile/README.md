@@ -20,6 +20,14 @@ A catalog of which versions of open-source components — `curl`, `OpenSSH`, `Li
 brew install starhaven-io/tap/macosdb
 ```
 
+### [midden](https://github.com/starhaven-io/midden)
+
+A CLI that resolves, audits, and garbage-collects the state Claude Code accumulates. Surfaces what's actually active for a given directory with provenance, flags what's stale or leaking, and prunes `~/.claude.json` entries and ephemeral worktrees that nothing else cleans up.
+
+```sh
+brew install starhaven-io/tap/midden
+```
+
 ### [pinprick](https://github.com/starhaven-io/pinprick)
 
 Supply-chain security for GitHub Actions. Pins action references to full SHAs, checks for updates, and audits pinned actions for runtime fetch patterns that bypass pinning — `curl | sh`, unpinned `git clone`, `FROM :latest`, and more. SARIF output for GitHub code scanning.
