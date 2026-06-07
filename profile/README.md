@@ -30,11 +30,15 @@ brew install starhaven-io/tap/midden
 
 ### [pinprick](https://github.com/starhaven-io/pinprick)
 
-Supply-chain security for GitHub Actions. Pins action references to full SHAs, checks for updates, and audits pinned actions for runtime fetch patterns that bypass pinning — `curl | sh`, unpinned `git clone`, `FROM :latest`, and more. SARIF output for GitHub code scanning.
+Supply-chain security for GitHub Actions. Pins action references to full SHAs, checks for updates, and audits pinned actions for runtime fetch patterns that bypass pinning — `curl | sh`, unpinned `git clone`, `FROM :latest`, and more. SARIF output for GitHub code scanning, and a hosted catalog of audited actions at [pinprick.rs](https://pinprick.rs).
 
 ```sh
 brew install starhaven-io/tap/pinprick
 ```
+
+### [pkgstory](https://github.com/starhaven-io/pkgstory)
+
+Every package has a version story. pkgstory mines a package manager's git history into a browsable timeline — which version shipped, and when — for every Homebrew formula and cask. Deprecated, disabled, and removed packages are recorded with the date and Homebrew's own reason, instead of trailing off at a stale last version. The whole catalog is searchable, with a per-package RSS feed, live at [pkgstory.dev](https://pkgstory.dev).
 
 ## Website
 
