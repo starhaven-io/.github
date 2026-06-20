@@ -4,44 +4,64 @@ Most importantly, keep this repository's public GitHub organization profile
 accurate, restrained, and safe to publish. Changes here are visible at
 <https://github.com/starhaven-io>.
 
+## Project overview
+
 This is a small Markdown-only repository for GitHub community/profile files for
 the `starhaven-io` organization. It does not contain application source code,
 build tooling, or a test suite. Please follow these guidelines when
 contributing:
 
-## Required Before Each Commit
+## Required checks
 
-- Run `git diff --check` to catch trailing whitespace and malformed patches.
+- Run `just check` to catch diff hygiene issues, workflow audit findings,
+  action supply-chain audit findings, and broken profile/community-health links.
+- Run `just install-hooks` once per clone so DCO sign-off and pre-push checks are
+  active.
 - Review the rendered Markdown shape of any changed `.md` file, especially
   `profile/README.md`, before finishing.
 - Check links and install snippets when adding or changing a project entry.
   Prefer exact GitHub repository URLs, canonical product/site URLs, and current
   Homebrew install commands.
+- Run `just lychee` after changing README/profile links when you need the link
+  check by itself.
 - Confirm `git status --short` only shows intended changes.
 
-## Commit Conventions
+## Commit and PR conventions
 
 - Use Conventional Commits: `type(scope): description` (`feat`, `fix`, `docs`,
   `chore`, and so on), consistent with the rest of the `starhaven-io` org.
 - Sign off every commit with `git commit -s` for DCO.
-- When a change is authored with Claude, add a
-  `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` trailer
-  after `Signed-off-by`. Bump the model version as newer ones ship.
+- When authored with an AI coding agent, add a `Co-Authored-By` trailer after
+  `Signed-off-by`, naming the agent and model. Current examples:
+  `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>` or
+  `Co-Authored-By: Codex GPT-5 <noreply@openai.com>`. Bump the model version as
+  newer ones ship.
 - Never commit directly to `main` — branch and open a pull request.
 - Keep PR descriptions to a short summary of the change. No test-plan sections,
-  no bot or tool attribution, and no "Generated with Claude Code" footers.
+  no bot or tool attribution, and no generated-with footers.
 
-## Repository Structure
+## Repository structure
 
 - `README.md`: Describes this `.github` repository and points to the rendered
   organization profile.
+- `.github/workflows/codeql.yml`: actions-only CodeQL analysis for workflow
+  changes.
+- `.github/workflows/link-check.yml`: weekly profile and community-health link
+  check.
+- `.github/workflows/pinprick-audit.yml`: workflow supply-chain audit.
+- `.github/workflows/zizmor.yml`: GitHub Actions security audit.
+- `.github/FUNDING.yml`: inherited organization funding metadata.
+- `CONTRIBUTING.md`: inherited contribution guidelines for repositories without
+  a local policy.
 - `profile/README.md`: Renders as the public profile at
   <https://github.com/starhaven-io>.
+- `SECURITY.md`: inherited vulnerability disclosure policy.
+- `lychee.toml`: profile and community-health link-check configuration.
 - `AGENTS.md`: Shared instructions for AI coding agents working in this
   repository.
 - `CLAUDE.md`: Compatibility pointer for Claude Code; keep it as `@AGENTS.md`.
 
-## Content Guidelines
+## Safety / do-not-touch rules
 
 1. Keep the profile concise and factual. Prefer concrete product descriptions,
    maintained project links, and install commands over marketing language.
@@ -59,8 +79,8 @@ contributing:
    parameters.
 7. Keep diffs minimal and avoid broad copy rewrites unless the user explicitly
    asks for a larger editorial pass.
-8. If adding GitHub community health files later, keep them organization-scoped
-   and avoid policies that conflict with individual project repositories.
+8. Keep GitHub community health files organization-scoped and avoid policies
+   that conflict with individual project repositories.
 9. Do not add badges, metrics, sponsorship links, analytics, or generated assets
    unless the user asks for them and the source is trustworthy.
 10. Preserve plain Markdown portability; avoid HTML unless GitHub-flavored
