@@ -40,10 +40,18 @@ brew install starhaven-io/tap/pinprick
 
 Every package has a version story. pkgstory mines a package manager's git history into a browsable timeline — which version shipped, and when — for every Homebrew formula and cask. Deprecated, disabled, and removed packages are recorded with the date and Homebrew's own reason, instead of trailing off at a stale last version. The whole catalog is searchable, with a per-package RSS feed, live at [pkgstory.dev](https://pkgstory.dev).
 
+## Distribution
+
+The [starhaven-io Homebrew tap](https://github.com/starhaven-io/homebrew-tap) publishes casks for Starhaven tools that are not available directly from Homebrew/core or Homebrew/cask.
+
+```sh
+brew tap starhaven-io/tap
+```
+
 ## Website
 
 [starhaven.io](https://starhaven.io)
 
 ## License
 
-All projects are licensed under [AGPL-3.0-only](https://www.gnu.org/licenses/agpl-3.0.en.html) unless otherwise noted.
+Project repositories are licensed under [AGPL-3.0-only](https://www.gnu.org/licenses/agpl-3.0.en.html) unless otherwise noted. Distribution and community metadata, including the Homebrew tap and this profile repository, may use repository-specific licenses.
