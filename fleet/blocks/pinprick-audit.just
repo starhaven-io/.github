@@ -1,0 +1,2 @@
+pinprick-audit:
+    pinprick audit .

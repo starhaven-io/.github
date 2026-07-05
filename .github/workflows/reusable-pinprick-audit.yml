@@ -1,0 +1,33 @@
+name: Reusable pinprick audit
+
+on:
+  workflow_call:
+    inputs:
+      advanced-security:
+        type: boolean
+        required: true
+      fail-on-findings:
+        type: boolean
+        required: true
+
+permissions: {}
+
+jobs:
+  audit:
+    name: Audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write # required to upload SARIF results
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Run pinprick
+        uses: starhaven-io/pinprick-action@b711e85aacbd9cf73e0285b16b0f3d0b35b3ae60 # v0.2.0
+        with:
+          # Fork pull requests cannot upload SARIF with the read-only token.
+          advanced-security: ${{ inputs.advanced-security }}
+          fail-on-findings: ${{ inputs.fail-on-findings }}

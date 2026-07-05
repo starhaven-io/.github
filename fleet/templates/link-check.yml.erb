@@ -1,0 +1,31 @@
+name: Link Check
+
+on:
+<% if pull_request_paths && !pull_request_paths.empty? -%>
+  pull_request:
+    paths:
+<% pull_request_paths.each do |path| -%>
+      - "<%= path %>"
+<% end -%>
+<% end -%>
+  schedule:
+    - cron: "<%= schedule %>"<% if schedule == "0 14 * * 1" %> # every Monday at 14:00 UTC<% end %>
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: <%= concurrency_group %>
+  cancel-in-progress: true
+
+jobs:
+  lychee:
+    name: Check links
+    permissions:
+      contents: read
+    uses: starhaven-io/.github/.github/workflows/reusable-link-check.yml@<%= reusable_ref %> # <%= reusable_version %>
+    with:
+      args: <%= scalar(args) %>
+      build-site: <%= build_site %>
+      site-directory: "<%= site_directory %>"
+      authenticated-github: <%= authenticated_github %>

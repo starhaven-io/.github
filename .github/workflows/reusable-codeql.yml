@@ -1,0 +1,88 @@
+name: Reusable CodeQL
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        type: string
+        required: true
+      runner:
+        type: string
+        default: "ubuntu-slim"
+      timeout-minutes:
+        type: number
+        default: 30
+      build-mode:
+        type: string
+        default: ""
+      build-profile:
+        type: string
+        default: ""
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -xeuo pipefail {0}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      security-events: write # required to upload SARIF results
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(inputs.languages) }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        if: inputs.build-mode == ''
+        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Initialize CodeQL
+        if: inputs.build-mode != ''
+        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ inputs.build-mode }}
+
+      - name: Build Swift package
+        if: inputs.build-profile == 'swift-package'
+        run: swift build
+
+      - name: Build Brewy
+        if: inputs.build-profile == 'brewy-xcode'
+        run: |
+          xcodebuild \
+            -project Brewy.xcodeproj \
+            -scheme Brewy \
+            -destination 'generic/platform=macOS' \
+            -configuration Debug \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_TREAT_WARNINGS_AS_ERRORS=YES \
+            EXCLUDED_ARCHS=x86_64 \
+            build
+
+      - name: Reject unknown build profile
+        if: inputs.build-profile != '' && inputs.build-profile != 'swift-package' && inputs.build-profile != 'brewy-xcode'
+        env:
+          BUILD_PROFILE: ${{ inputs.build-profile }}
+        run: |
+          echo "::error::Unsupported CodeQL build profile: ${BUILD_PROFILE}"
+          exit 1
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          category: "/language:${{ matrix.language }}"

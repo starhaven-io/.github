@@ -1,0 +1,37 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - main
+<% if paths && !paths.empty? -%>
+    paths:
+<% paths.each do |path| -%>
+      - "<%= path %>"
+<% end -%>
+<% end -%>
+<% if schedule -%>
+  schedule:
+    - cron: "<%= schedule %>"
+  workflow_dispatch:
+<% end -%>
+
+concurrency:
+  group: "codeql-${{ github.ref }}"
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: Analyze
+    permissions:
+      contents: read
+      security-events: write # required to upload SARIF results
+    uses: starhaven-io/.github/.github/workflows/reusable-codeql.yml@<%= reusable_ref %> # <%= reusable_version %>
+    with:
+      languages: <%= single_quoted(languages_json) %>
+      runner: "<%= runner %>"
+      timeout-minutes: <%= timeout_minutes %>
+      build-mode: "<%= build_mode %>"
+      build-profile: "<%= build_profile %>"

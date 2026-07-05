@@ -1,0 +1,32 @@
+name: pinprick audit
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+  push:
+    branches:
+      - main
+<% if push_paths && !push_paths.empty? -%>
+    paths:
+<% push_paths.each do |path| -%>
+      - "<%= path %>"
+<% end -%>
+<% end -%>
+
+concurrency:
+  group: "pinprick-audit-${{ github.ref }}"
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  audit:
+    name: Audit
+    permissions:
+      contents: read
+      security-events: write # required to upload SARIF results
+    uses: starhaven-io/.github/.github/workflows/reusable-pinprick-audit.yml@<%= reusable_ref %> # <%= reusable_version %>
+    with:
+      advanced-security: <%= advanced_security %>
+      fail-on-findings: <%= fail_on_findings %>
