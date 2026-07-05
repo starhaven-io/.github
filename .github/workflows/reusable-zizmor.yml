@@ -2,6 +2,10 @@ name: Reusable zizmor
 
 on:
   workflow_call:
+    inputs:
+      timeout-minutes:
+        type: number
+        default: 15
 
 permissions: {}
 
@@ -9,7 +13,7 @@ jobs:
   zizmor:
     name: Analyze
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: read
       security-events: write # required to upload SARIF results
