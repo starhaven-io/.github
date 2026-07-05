@@ -600,7 +600,8 @@ class FleetSync
     body = body.strip
     case style
     when :markdown
-      "<!-- fleet:block #{block_name} -->\n#{body}\n<!-- fleet:end -->"
+      # Blank padding keeps Prettier-checked consumers from reformatting inside the fence.
+      "<!-- fleet:block #{block_name} -->\n\n#{body}\n\n<!-- fleet:end -->"
     when :hash
       "# fleet:block #{block_name}\n#{body}\n# fleet:end"
     else
