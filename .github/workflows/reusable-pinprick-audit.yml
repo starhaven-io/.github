@@ -1,4 +1,4 @@
-name: Reusable pinprick audit
+name: Reusable pinprick audit # zizmor: ignore[excessive-permissions]
 
 on:
   workflow_call:
@@ -9,17 +9,19 @@ on:
       fail-on-findings:
         type: boolean
         required: true
+      timeout-minutes:
+        type: number
+        default: 15
 
-permissions: {}
+# Permissions inherit from the caller: SARIF consumers grant security-events,
+# no-GHAS private repos grant contents only. Declaring more here than a caller
+# grants fails the run at startup.
 
 jobs:
-  audit:
+  audit: # zizmor: ignore[excessive-permissions]
     name: Audit
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      security-events: write # required to upload SARIF results
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

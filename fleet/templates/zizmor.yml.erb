@@ -6,6 +6,14 @@ on:
       - main
     paths:
       - ".github/workflows/**"
+<% push_paths.each do |path| -%>
+      - "<%= path %>"
+<% end -%>
+<% if schedule -%>
+  schedule:
+    - cron: "<%= schedule %>"
+  workflow_dispatch:
+<% end -%>
 
 concurrency:
   group: "zizmor-${{ github.ref }}"
@@ -20,3 +28,7 @@ jobs:
       contents: read
       security-events: write # required to upload SARIF results
     uses: starhaven-io/.github/.github/workflows/reusable-zizmor.yml@<%= reusable_ref %> # <%= reusable_version %>
+<% if timeout_minutes != 15 -%>
+    with:
+      timeout-minutes: <%= timeout_minutes %>
+<% end -%>

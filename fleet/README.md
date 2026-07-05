@@ -61,8 +61,11 @@ consumer repo. The shared job bodies live in this hub:
 - `reusable-conventional-commits.yml`
 
 Consumer callers pin reusable workflows by hub commit SHA with a fleet version
-comment. `fleet/sync.rb` preserves an existing pinned SHA and uses the current
-hub SHA only on first render.
+comment, and the comment's tag must point at the pinned SHA. `fleet/sync.rb`
+seeds new pins at the current release's tag commit (falling back to the sync
+push SHA only on the release push itself, which then receives the tag),
+preserves valid pins even when newer releases exist, and repairs pins whose
+comment does not name the pinned commit. Dependabot moves valid pins forward.
 
 ## Running Locally
 

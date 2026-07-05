@@ -25,8 +25,13 @@ jobs:
     name: Audit
     permissions:
       contents: read
+<% if advanced_security != false -%>
       security-events: write # required to upload SARIF results
+<% end -%>
     uses: starhaven-io/.github/.github/workflows/reusable-pinprick-audit.yml@<%= reusable_ref %> # <%= reusable_version %>
     with:
       advanced-security: <%= advanced_security %>
       fail-on-findings: <%= fail_on_findings %>
+<% if timeout_minutes != 15 -%>
+      timeout-minutes: <%= timeout_minutes %>
+<% end -%>

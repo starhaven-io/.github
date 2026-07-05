@@ -192,23 +192,31 @@ class FleetSync
       )
     end
 
-    render_zizmor unless exception?(config, "zizmor")
+    render_zizmor(params.fetch("zizmor", {})) unless exception?(config, "zizmor")
     render_pinprick_audit(params.fetch("pinprick-audit", {}), config) unless exception?(config, "pinprick-audit")
     render_link_check(params.fetch("link-check")) if params["link-check"]
     render_codeql(params, config) unless exception?(config, "codeql")
   end
 
-  def render_zizmor
+  def render_zizmor(zizmor_config)
     ref, version = reusable_pin("zizmor")
     write_file(
       ".github/workflows/zizmor.yml",
-      render_template("zizmor.yml.erb", reusable_ref: ref, reusable_version: version),
+      render_template(
+        "zizmor.yml.erb",
+        reusable_ref: ref,
+        reusable_version: version,
+        push_paths: zizmor_config.fetch("push-paths", []),
+        schedule: zizmor_config["schedule"],
+        timeout_minutes: zizmor_config.fetch("timeout-minutes", 15)
+      ),
       ".github/workflows/zizmor.yml"
     )
   end
 
   def render_pinprick_audit(pinprick_config, config)
     advanced_security = pinprick_config.fetch("advanced-security", SAME_ORG_ADVANCED_SECURITY)
+    advanced_security = advanced_security == "true" if %w[true false].include?(advanced_security)
     fail_on_findings = pinprick_config.fetch("fail-on-findings", true)
     push_paths = pinprick_config.fetch("push-paths", nil)
 
@@ -221,7 +229,8 @@ class FleetSync
         reusable_version: version,
         advanced_security: advanced_security,
         fail_on_findings: fail_on_findings,
-        push_paths: push_paths
+        push_paths: push_paths,
+        timeout_minutes: pinprick_config.fetch("timeout-minutes", 15)
       ),
       ".github/workflows/pinprick-audit.yml"
     )
@@ -296,6 +305,11 @@ class FleetSync
 
     if repo_path(".github/workflows/pinprick-audit.yml").file? && repo_name_for_urls != "pinprick"
       params["pinprick-audit"] = derive_pinprick_audit
+    end
+
+    if repo_path(".github/workflows/zizmor.yml").file?
+      zizmor = derive_zizmor
+      params["zizmor"] = zizmor unless zizmor.empty?
     end
 
     readme = derive_readme
@@ -382,8 +396,23 @@ class FleetSync
     {
       "advanced-security" => text[/^\s+advanced-security:\s*(.+)$/, 1]&.strip || SAME_ORG_ADVANCED_SECURITY,
       "fail-on-findings" => (text[/^\s+fail-on-findings:\s*(.+)$/, 1]&.strip || "true") == "true",
-      "push-paths" => extract_push_paths_after_push(text)
+      "push-paths" => extract_push_paths_after_push(text),
+      "timeout-minutes" => derived_timeout(text)
     }.reject { |_key, value| blank?(value) }
+  end
+
+  def derive_zizmor
+    text = read_path(repo_path(".github/workflows/zizmor.yml"))
+    {
+      "push-paths" => extract_list_after(text, "push", "paths").reject { |path| path == ".github/workflows/**" },
+      "schedule" => text[/cron:\s*"([^"]+)"/, 1],
+      "timeout-minutes" => derived_timeout(text)
+    }.reject { |_key, value| blank?(value) }
+  end
+
+  def derived_timeout(text)
+    timeout = (text[/^\s+timeout-minutes:\s*(\d+)$/, 1] || "15").to_i
+    timeout == 15 ? nil : timeout
   end
 
   def derive_readme
