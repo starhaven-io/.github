@@ -143,9 +143,10 @@ jobs:
           GH_TOKEN: ${{ steps.write-token.outputs.token }}
           APP_SLUG: ${{ steps.write-token.outputs.app-slug }}
           REPOSITORY: starhaven-io/${{ matrix.repo }}
-          BRANCH: fleet-sync
         run: |
-          TITLE="chore(fleet): sync managed surfaces $(cat ../hub/fleet/VERSION)"
+          FLEET_VERSION="$(cat ../hub/fleet/VERSION)"
+          TITLE="chore(fleet): sync managed surfaces ${FLEET_VERSION}"
+          BRANCH="fleet-sync-${FLEET_VERSION}"
           BOT_USER="${APP_SLUG}[bot]"
           BOT_ID=$(gh api "/users/${BOT_USER}" --jq .id)
           BOT_EMAIL="${BOT_ID}+${BOT_USER}@users.noreply.github.com"
@@ -213,3 +214,10 @@ jobs:
           else
             gh pr create --repo "${REPOSITORY}" --base main --head "${BRANCH}" --title "${TITLE}" --body-file "${BODY_FILE}"
           fi
+
+          gh pr list --repo "${REPOSITORY}" --state open --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"fleet-sync-\")) | select(.headRefName != \"${BRANCH}\") | .number" |
+          while IFS= read -r STALE; do
+            gh pr close "${STALE}" --repo "${REPOSITORY}" --delete-branch \
+              --comment "Superseded by the ${FLEET_VERSION} sync."
+          done
