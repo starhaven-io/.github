@@ -1,10 +1,13 @@
 schema: 1
 owner: "starhaven-io"
-# Consumers join in rollout waves.
 repos:
-  - "midden"
-  - "pinprick"
+  - ".github"
+  - "Brewy"
+  - "homebrew-tap"
   - "macOSdb"
+  - "midden"
+  - "orrery"
+  - "pinprick"
+  - "pinprick-action"
   - "pkgstory"
   - "starhaven.io"
-  - "Brewy"
