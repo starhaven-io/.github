@@ -1,0 +1,49 @@
+name: Reusable Conventional Commits
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  conventional-commits:
+    name: Conventional Commits
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read # required to read PR titles
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check pull request title
+        if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if [[ ! "${TITLE}" =~ ^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\([^)]+\))?:\ .+ ]]; then
+            echo "::error::Pull request title must use Conventional Commits format"
+            exit 1
+          fi
+
+      - name: Check pushed commits
+        if: github.event_name != 'pull_request'
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          if [[ -z "${BEFORE}" || "${BEFORE}" =~ ^0+$ ]]; then
+            RANGE="${AFTER}^..${AFTER}"
+          else
+            RANGE="${BEFORE}..${AFTER}"
+          fi
+
+          git log --format=%s "${RANGE}" | while IFS= read -r subject; do
+            if [[ ! "${subject}" =~ ^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\([^)]+\))?:\ .+ ]]; then
+              echo "::error::Commit subject must use Conventional Commits format: ${subject}"
+              exit 1
+            fi
+          done

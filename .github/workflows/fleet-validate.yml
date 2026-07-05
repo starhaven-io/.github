@@ -1,0 +1,108 @@
+name: Fleet Validate
+
+on:
+  pull_request:
+    paths:
+      - "fleet/**"
+      - ".github/workflows/reusable-*.yml"
+      - ".github/workflows/fleet-sync.yml"
+      - ".github/workflows/fleet-validate.yml"
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+concurrency:
+  group: "fleet-validate-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.repos.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Check renderer and templates
+        run: |
+          ruby -c fleet/sync.rb
+          ruby -rerb -ryaml -e '
+            Dir["fleet/templates/*.erb"].each do |template|
+              ERB.new(File.read(template, encoding: "UTF-8"), trim_mode: "-")
+            end
+            Dir[".github/workflows/*.yml"].each do |workflow|
+              YAML.safe_load(File.read(workflow, encoding: "UTF-8"), permitted_classes: [], aliases: false)
+            end
+          '
+
+      - name: Build repository matrix
+        id: repos
+        run: |
+          ruby -ryaml -rjson -e '
+            data = YAML.safe_load(File.read("fleet/repos.yml"), permitted_classes: [], aliases: false)
+            matrix = { include: data.fetch("repos").map { |repo| { repo: repo } } }
+            File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |file| file.puts("matrix=#{JSON.generate(matrix)}") }
+          '
+
+  dry-run:
+    name: Dry run (${{ matrix.repo }})
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout fleet hub
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: hub
+          persist-credentials: false
+
+      - name: Checkout consumer
+        id: clone
+        continue-on-error: true
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: starhaven-io/${{ matrix.repo }}
+          path: repo
+          persist-credentials: false
+
+      - name: Note skipped consumer
+        if: steps.clone.outcome == 'failure'
+        env:
+          REPO_NAME: ${{ matrix.repo }}
+        run: |
+          # The pull_request token cannot read private consumers; the real sync validates those.
+          echo "::notice::skipping ${REPO_NAME}: not readable from a pull_request run"
+
+      - name: Render and require idempotence
+        if: steps.clone.outcome == 'success'
+        env:
+          FLEET_HUB_SHA: ${{ github.sha }}
+          REPO_NAME: ${{ matrix.repo }}
+        run: |
+          if [ -f repo/.fleet.yml ]; then
+            ruby hub/fleet/sync.rb --hub-root hub --repo-root repo --repo-name "${REPO_NAME}"
+          else
+            ruby hub/fleet/sync.rb --hub-root hub --repo-root repo --repo-name "${REPO_NAME}" --bootstrap
+          fi
+          ruby hub/fleet/sync.rb --hub-root hub --repo-root repo --repo-name "${REPO_NAME}" --check
+
+      - name: Check rendered tree hygiene
+        if: steps.clone.outcome == 'success'
+        working-directory: repo
+        run: |
+          git add -A
+          git diff --cached --check

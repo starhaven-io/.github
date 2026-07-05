@@ -1,0 +1,17 @@
+## License
+
+<% if license_text -%>
+<%= license_text %>
+<% elsif license == "agpl" -%>
+This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`).
+
+Copyright (C) 2026 Patrick Linnane
+<% elsif license == "mit" -%>
+This project is licensed under the [MIT License](LICENSE).
+<% end -%>
+<% unless extra_license_lines.empty? -%>
+
+<% extra_license_lines.each_with_index do |line, index| -%>
+<%= line %>
+<% end -%>
+<% end -%>

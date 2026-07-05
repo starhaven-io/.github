@@ -1,0 +1,215 @@
+name: Fleet Sync
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "fleet/**"
+      - ".github/workflows/reusable-*.yml"
+  schedule:
+    - cron: "17 16 * * 1"
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Optional single repository name from fleet/repos.yml"
+        required: false
+        type: string
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+concurrency:
+  group: fleet-sync
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.repos.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Build repository matrix
+        id: repos
+        env:
+          SELECTED_REPO: ${{ inputs.repo }}
+        run: |
+          ruby -ryaml -rjson -e '
+            data = YAML.safe_load(File.read("fleet/repos.yml"), permitted_classes: [], aliases: false)
+            repos = data.fetch("repos")
+            selected = ENV.fetch("SELECTED_REPO", "")
+            repos = repos.select { |repo| repo == selected } unless selected.empty?
+            abort("unknown fleet repo: #{selected}") if repos.empty? && !selected.empty?
+            matrix = { include: repos.map { |repo| { repo: repo } } }
+            File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |file| file.puts("matrix=#{JSON.generate(matrix)}") }
+          '
+
+  sync:
+    name: Sync (${{ matrix.repo }})
+    needs: prepare
+    if: ${{ fromJSON(needs.prepare.outputs.matrix).include[0] != null }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: starhaven
+      deployment: false
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Checkout fleet hub
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: hub
+          persist-credentials: false
+
+      - name: Mint read token
+        id: read-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.repo }}
+          permission-contents: read
+
+      - name: Checkout consumer
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: starhaven-io/${{ matrix.repo }}
+          token: ${{ steps.read-token.outputs.token }}
+          path: repo
+          persist-credentials: false
+
+      - name: Render fleet surfaces
+        env:
+          FLEET_HUB_SHA: ${{ github.sha }}
+          REPO_NAME: ${{ matrix.repo }}
+        run: |
+          if [ -f repo/.fleet.yml ]; then
+            ruby hub/fleet/sync.rb --hub-root hub --repo-root repo --repo-name "${REPO_NAME}"
+          else
+            ruby hub/fleet/sync.rb --hub-root hub --repo-root repo --repo-name "${REPO_NAME}" --bootstrap
+          fi
+
+      - name: Collect drift
+        id: drift
+        working-directory: repo
+        run: |
+          STATUS="$(git status --porcelain=v1 -uall)"
+          if [ -z "${STATUS}" ]; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          printf "%s\n" "${STATUS}" | sed -E 's/^...//' > ../changed-files.txt
+          {
+            echo "changed=true"
+            echo "files<<EOF"
+            cat ../changed-files.txt
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Mint write token
+        id: write-token
+        if: steps.drift.outputs.changed == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ matrix.repo }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - name: Create verified sync commit and open PR
+        if: steps.drift.outputs.changed == 'true'
+        working-directory: repo
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          APP_SLUG: ${{ steps.write-token.outputs.app-slug }}
+          REPOSITORY: starhaven-io/${{ matrix.repo }}
+          BRANCH: fleet-sync
+          TITLE: "chore(fleet): sync managed surfaces"
+        run: |
+          BOT_USER="${APP_SLUG}[bot]"
+          BOT_ID=$(gh api "/users/${BOT_USER}" --jq .id)
+          BOT_EMAIL="${BOT_ID}+${BOT_USER}@users.noreply.github.com"
+          BASE_SHA=$(git rev-parse HEAD)
+
+          BODY_FILE="${RUNNER_TEMP}/fleet-pr-body.md"
+          {
+            echo "Automated convergence of fleet-managed surfaces."
+            echo ""
+            echo "Managed surfaces changed:"
+            sed 's/^/- `/' ../changed-files.txt | sed 's/$/`/'
+            echo ""
+            echo "Any file listed here drifted from the hub canonical source or received newly rendered fleet markers."
+          } > "${BODY_FILE}"
+
+          if gh api "repos/${REPOSITORY}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
+            gh api "repos/${REPOSITORY}/git/refs/heads/${BRANCH}" \
+              -X PATCH \
+              -f "sha=${BASE_SHA}" \
+              -F force=true
+          else
+            gh api "repos/${REPOSITORY}/git/refs" \
+              -X POST \
+              -f "ref=refs/heads/${BRANCH}" \
+              -f "sha=${BASE_SHA}"
+          fi
+
+          ADDITIONS=$(ruby -rjson -e '
+            files = File.readlines("../changed-files.txt", chomp: true)
+            additions = files.map do |path|
+              { path: path, contents: [File.binread(path)].pack("m0") }
+            end
+            print JSON.generate(additions)
+          ')
+
+          COMMIT_BODY="Signed-off-by: ${BOT_USER} <${BOT_EMAIL}>"
+          jq -n \
+            --arg repo "${REPOSITORY}" \
+            --arg branch "${BRANCH}" \
+            --arg title "${TITLE}" \
+            --arg body "${COMMIT_BODY}" \
+            --arg head "${BASE_SHA}" \
+            --argjson additions "${ADDITIONS}" \
+            '{
+              query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
+              variables: {
+                input: {
+                  branch: { repositoryNameWithOwner: $repo, branchName: $branch },
+                  message: { headline: $title, body: $body },
+                  fileChanges: { additions: $additions },
+                  expectedHeadOid: $head
+                }
+              }
+            }' | gh api graphql --input -
+
+          OPEN_PR=$(gh pr list \
+            --repo "${REPOSITORY}" \
+            --head "${BRANCH}" \
+            --state open \
+            --json number \
+            --jq '.[0].number // ""')
+
+          if [ -n "${OPEN_PR}" ]; then
+            gh pr edit "${OPEN_PR}" --repo "${REPOSITORY}" --title "${TITLE}" --body-file "${BODY_FILE}"
+          else
+            gh pr create --repo "${REPOSITORY}" --base main --head "${BRANCH}" --title "${TITLE}" --body-file "${BODY_FILE}"
+          fi
