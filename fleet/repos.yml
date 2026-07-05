@@ -1,5 +1,6 @@
 schema: 1
 owner: "starhaven-io"
-# Consumers join in rollout waves; midden is the pilot.
+# Consumers join in rollout waves.
 repos:
   - "midden"
+  - "pinprick"
