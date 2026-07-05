@@ -24,7 +24,8 @@ jobs:
         env:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if [[ ! "${TITLE}" =~ ^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\([^)]+\))?:\ .+ ]]; then
+          PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\([^)]+\))?: .+'
+          if [[ ! "${TITLE}" =~ ${PATTERN} ]]; then
             echo "::error::Pull request title must use Conventional Commits format"
             exit 1
           fi
@@ -41,8 +42,9 @@ jobs:
             RANGE="${BEFORE}..${AFTER}"
           fi
 
+          PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\([^)]+\))?: .+'
           git log --format=%s "${RANGE}" | while IFS= read -r subject; do
-            if [[ ! "${subject}" =~ ^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\([^)]+\))?:\ .+ ]]; then
+            if [[ ! "${subject}" =~ ${PATTERN} ]]; then
               echo "::error::Commit subject must use Conventional Commits format: ${subject}"
               exit 1
             fi
