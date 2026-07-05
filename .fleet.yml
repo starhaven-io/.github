@@ -1,0 +1,25 @@
+schema: 1
+license: "mit"
+params:
+  dependabot:
+    - package-ecosystem: "github-actions"
+      group: "github-actions"
+      directory: "/"
+  link-check:
+    targets: "--config lychee.toml README.md profile/README.md CONTRIBUTING.md SECURITY.md"
+    build-site: false
+    authenticated-github: true
+    schedule: "0 14 * * 1"
+    concurrency-group: "link-check"
+  codeql:
+    languages: ["actions", "ruby"]
+    paths: [".github/workflows/**", "fleet/**"]
+    runner: "ubuntu-slim"
+    timeout-minutes: 30
+  pinprick-audit:
+    advanced-security: "${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}"
+    fail-on-findings: true
+  readme:
+    license:
+      text: "This community metadata repository is licensed under the [MIT License](LICENSE)."
+exceptions: {}

@@ -72,6 +72,8 @@ contributing:
 10. Preserve plain Markdown portability; avoid HTML unless GitHub-flavored
     Markdown cannot express the needed layout cleanly.
 
+<!-- fleet:block commit-and-pr-conventions -->
+
 ## Commit and PR conventions
 
 - Conventional Commits: `type(scope): description`. Valid types: `feat`,
@@ -86,3 +88,8 @@ contributing:
 - Never commit directly to `main`; create a feature branch and open a PR.
 - PR descriptions should contain only a concise summary of changes. Do not add
   test-plan sections, bot attribution, or generated-with footers.
+- Comments must earn their keep: a comment states a constraint or rationale the
+  code cannot express. Never add comments that narrate what the code does,
+  restate names, or explain a change to its reviewer.
+
+<!-- fleet:end -->
