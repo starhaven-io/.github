@@ -12,8 +12,8 @@ params:
     schedule: "0 14 * * 1"
     concurrency-group: "link-check"
   codeql:
-    languages: ["actions"]
-    paths: [".github/workflows/**"]
+    languages: ["actions", "ruby"]
+    paths: [".github/workflows/**", "fleet/**"]
     runner: "ubuntu-slim"
     timeout-minutes: 30
   pinprick-audit:
