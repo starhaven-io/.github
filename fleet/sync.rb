@@ -199,9 +199,10 @@ class FleetSync
   end
 
   def render_zizmor
+    ref, version = reusable_pin("zizmor")
     write_file(
       ".github/workflows/zizmor.yml",
-      render_template("zizmor.yml.erb", reusable_ref: reusable_ref("zizmor"), reusable_version: reusable_version("zizmor")),
+      render_template("zizmor.yml.erb", reusable_ref: ref, reusable_version: version),
       ".github/workflows/zizmor.yml"
     )
   end
@@ -211,12 +212,13 @@ class FleetSync
     fail_on_findings = pinprick_config.fetch("fail-on-findings", true)
     push_paths = pinprick_config.fetch("push-paths", nil)
 
+    ref, version = reusable_pin("pinprick-audit")
     write_file(
       ".github/workflows/pinprick-audit.yml",
       render_template(
         "pinprick-audit.yml.erb",
-        reusable_ref: reusable_ref("pinprick-audit"),
-        reusable_version: reusable_version("pinprick-audit"),
+        reusable_ref: ref,
+        reusable_version: version,
         advanced_security: advanced_security,
         fail_on_findings: fail_on_findings,
         push_paths: push_paths
@@ -226,12 +228,13 @@ class FleetSync
   end
 
   def render_link_check(link_config)
+    ref, version = reusable_pin("link-check")
     write_file(
       ".github/workflows/link-check.yml",
       render_template(
         "link-check.yml.erb",
-        reusable_ref: reusable_ref("link-check"),
-        reusable_version: reusable_version("link-check"),
+        reusable_ref: ref,
+        reusable_version: version,
         args: link_config.fetch("targets"),
         build_site: link_config.fetch("build-site", false),
         site_directory: link_config.fetch("site-directory", ""),
@@ -249,12 +252,13 @@ class FleetSync
     languages = codeql["languages"] || params["codeql-languages"]
     return unless languages
 
+    ref, version = reusable_pin("codeql")
     write_file(
       ".github/workflows/codeql.yml",
       render_template(
         "codeql.yml.erb",
-        reusable_ref: reusable_ref("codeql"),
-        reusable_version: reusable_version("codeql"),
+        reusable_ref: ref,
+        reusable_version: version,
         languages_json: JSON.generate(languages),
         paths: codeql.fetch("paths", []),
         schedule: codeql["schedule"],
@@ -652,27 +656,32 @@ class FleetSync
     config.fetch("exceptions", {}).key?(surface)
   end
 
-  def reusable_version(workflow_name = nil)
-    return existing_reusable_version(workflow_name) || fleet_version if workflow_name
-
-    fleet_version
-  end
-
-  def reusable_ref(workflow_name)
+  def reusable_pin(workflow_name)
     current = repo_path(".github/workflows/#{workflow_name}.yml")
     if current.file?
-      ref = read_path(current)[/starhaven-io\/\.github\/\.github\/workflows\/reusable-[^@]+@([0-9a-f]{40})/, 1]
-      return ref if ref
+      text = read_path(current)
+      sha = text[/starhaven-io\/\.github\/\.github\/workflows\/reusable-[^@]+@([0-9a-f]{40})/, 1]
+      version = text[/starhaven-io\/\.github\/\.github\/workflows\/reusable-[^@]+@[0-9a-f]{40}\s+#\s+(v\d+(?:\.\d+){2,3})/, 1]
+      if sha && version
+        tag_sha = version_commit(version)
+        # Preserve a pin only while its version comment still names the pinned
+        # commit; an unresolvable tag gets the benefit of the doubt so strict
+        # runs without tag data stay silent. Dependabot moves valid pins
+        # forward; sync repairs lying ones.
+        return [sha, version] if tag_sha.nil? || tag_sha == sha
+      end
     end
 
-    ENV["FLEET_HUB_SHA"] || git_hub_sha
+    [version_commit(fleet_version) || ENV["FLEET_HUB_SHA"] || git_hub_sha, fleet_version]
   end
 
-  def existing_reusable_version(workflow_name)
-    current = repo_path(".github/workflows/#{workflow_name}.yml")
-    return nil unless current.file?
+  def version_commit(version)
+    @version_commits ||= {}
+    return @version_commits[version] if @version_commits.key?(version)
 
-    read_path(current)[/starhaven-io\/\.github\/\.github\/workflows\/reusable-[^@]+@[0-9a-f]{40}\s+#\s+(v\d+(?:\.\d+){2,3})/, 1]
+    stdout, status = Open3.capture2("git", "-C", @hub_root.to_s, "rev-list", "-n1", "refs/tags/#{version}")
+    sha = stdout.strip
+    @version_commits[version] = status.success? && !sha.empty? ? sha : nil
   end
 
   def fleet_version
