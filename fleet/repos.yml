@@ -4,3 +4,6 @@ owner: "starhaven-io"
 repos:
   - "midden"
   - "pinprick"
+  - "macOSdb"
+  - "pkgstory"
+  - "starhaven.io"
