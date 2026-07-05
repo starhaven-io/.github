@@ -47,6 +47,10 @@ class FleetSync
     "CLAUDE.md" => "files/CLAUDE.md"
   }.freeze
 
+  OPTIONAL_TIER1_FILES = {
+    "zizmor-config" => [".github/zizmor.yml", "files/zizmor-config.yml"]
+  }.freeze
+
   EXECUTABLE_PATHS = [
     ".githooks/commit-msg",
     ".githooks/pre-push"
@@ -130,9 +134,16 @@ class FleetSync
 
     params = config.fetch("params", {})
     write_file(".mcp.json", read_path(hub_path("files/mcp.json")), ".mcp.json") if params["astro-docs"]
+    render_optional_tier1(params)
 
     EXECUTABLE_PATHS.each do |path|
       chmod_executable(path)
+    end
+  end
+
+  def render_optional_tier1(params)
+    OPTIONAL_TIER1_FILES.each do |param, (dest, source)|
+      write_file(dest, read_path(hub_path(source)), dest) if params[param]
     end
   end
 
@@ -199,7 +210,10 @@ class FleetSync
   end
 
   def render_zizmor(zizmor_config)
-    ref, version = reusable_pin("zizmor")
+    timeout_minutes = zizmor_config.fetch("timeout-minutes", 15)
+    required_inputs = []
+    required_inputs << "timeout-minutes" if timeout_minutes != 15
+    ref, version = reusable_pin("zizmor", required_inputs: required_inputs)
     write_file(
       ".github/workflows/zizmor.yml",
       render_template(
@@ -208,7 +222,7 @@ class FleetSync
         reusable_version: version,
         push_paths: zizmor_config.fetch("push-paths", []),
         schedule: zizmor_config["schedule"],
-        timeout_minutes: zizmor_config.fetch("timeout-minutes", 15)
+        timeout_minutes: timeout_minutes
       ),
       ".github/workflows/zizmor.yml"
     )
@@ -219,8 +233,11 @@ class FleetSync
     advanced_security = advanced_security == "true" if %w[true false].include?(advanced_security)
     fail_on_findings = pinprick_config.fetch("fail-on-findings", true)
     push_paths = pinprick_config.fetch("push-paths", nil)
+    timeout_minutes = pinprick_config.fetch("timeout-minutes", 15)
 
-    ref, version = reusable_pin("pinprick-audit")
+    required_inputs = ["advanced-security", "fail-on-findings"]
+    required_inputs << "timeout-minutes" if timeout_minutes != 15
+    ref, version = reusable_pin("pinprick-audit", required_inputs: required_inputs)
     write_file(
       ".github/workflows/pinprick-audit.yml",
       render_template(
@@ -230,14 +247,14 @@ class FleetSync
         advanced_security: advanced_security,
         fail_on_findings: fail_on_findings,
         push_paths: push_paths,
-        timeout_minutes: pinprick_config.fetch("timeout-minutes", 15)
+        timeout_minutes: timeout_minutes
       ),
       ".github/workflows/pinprick-audit.yml"
     )
   end
 
   def render_link_check(link_config)
-    ref, version = reusable_pin("link-check")
+    ref, version = reusable_pin("link-check", required_inputs: %w[args build-site site-directory authenticated-github])
     write_file(
       ".github/workflows/link-check.yml",
       render_template(
@@ -261,7 +278,7 @@ class FleetSync
     languages = codeql["languages"] || params["codeql-languages"]
     return unless languages
 
-    ref, version = reusable_pin("codeql")
+    ref, version = reusable_pin("codeql", required_inputs: %w[languages runner timeout-minutes build-mode build-profile])
     write_file(
       ".github/workflows/codeql.yml",
       render_template(
@@ -290,6 +307,7 @@ class FleetSync
 
     params = config.fetch("params")
     params["astro-docs"] = true if repo_path(".mcp.json").file?
+    params["zizmor-config"] = true if repo_path(".github/zizmor.yml").file?
 
     if repo_path(".github/dependabot.yml").file?
       params["dependabot"] = derive_dependabot
@@ -307,7 +325,7 @@ class FleetSync
       params["pinprick-audit"] = derive_pinprick_audit
     end
 
-    if repo_path(".github/workflows/zizmor.yml").file?
+    if repo_path(".github/workflows/zizmor.yml").file? && repo_name_for_urls != "orrery"
       zizmor = derive_zizmor
       params["zizmor"] = zizmor unless zizmor.empty?
     end
@@ -327,6 +345,8 @@ class FleetSync
 
     if repo_name_for_urls == "orrery"
       config.fetch("exceptions")["codeql"] = "terraform-only private infra; tofu.yml owns IaC validation"
+      config.fetch("exceptions")["zizmor"] =
+        "private repo without GHAS: no SARIF upload; zizmor.yml is a hand-rolled direct gate"
     end
 
     config
@@ -359,9 +379,24 @@ class FleetSync
   end
 
   def derive_link_check
-    text = read_path(repo_path(".github/workflows/link-check.yml"))
+    path = ".github/workflows/link-check.yml"
+    data = workflow_data(path)
+    if (caller = reusable_caller(data, "link-check"))
+      with = caller.fetch("with", {})
+      return {
+        "targets" => with.fetch("args", "README.md"),
+        "build-site" => with.fetch("build-site", false),
+        "site-directory" => with.fetch("site-directory", "").to_s,
+        "authenticated-github" => with.fetch("authenticated-github", false),
+        "schedule" => workflow_schedule(data) || "0 14 * * 1",
+        "pull-request-paths" => workflow_paths(data, "pull_request"),
+        "concurrency-group" => workflow_concurrency_group(data) || "link-check"
+      }.reject { |_key, value| blank?(value) }
+    end
+
+    text = read_path(repo_path(path))
     {
-      "targets" => text[/^\s+args:\s*(.+)$/, 1]&.strip || "README.md",
+      "targets" => unquote_scalar(text[/^\s+args:\s*(.+)$/, 1]&.strip) || "README.md",
       "build-site" => text.include?("npm run build"),
       "site-directory" => text[/working-directory:\s*([^\s]+)/, 1].to_s,
       "authenticated-github" => text.include?("GITHUB_TOKEN: ${{ github.token }}"),
@@ -372,7 +407,23 @@ class FleetSync
   end
 
   def derive_codeql
-    text = read_path(repo_path(".github/workflows/codeql.yml"))
+    path = ".github/workflows/codeql.yml"
+    data = workflow_data(path)
+    if (caller = reusable_caller(data, "codeql"))
+      with = caller.fetch("with", {})
+      languages = parse_json_array(with.fetch("languages"))
+      return {
+        "languages" => languages,
+        "paths" => workflow_paths(data, "push"),
+        "runner" => with["runner"] || default_codeql_runner(languages),
+        "timeout-minutes" => with.fetch("timeout-minutes", 30),
+        "build-mode" => with.fetch("build-mode", "").to_s,
+        "build-profile" => with.fetch("build-profile", "").to_s,
+        "schedule" => workflow_schedule(data)
+      }.reject { |_key, value| blank?(value) }
+    end
+
+    text = read_path(repo_path(path))
     languages =
       if (matrix = text[/language:\s*\[([^\]]+)\]/, 1])
         matrix.split(",").map(&:strip)
@@ -385,24 +436,47 @@ class FleetSync
       "paths" => extract_list_after(text, "push", "paths"),
       "runner" => text[/^\s+runs-on:\s*([^\s]+)$/, 1] || default_codeql_runner(languages),
       "timeout-minutes" => (text[/^\s+timeout-minutes:\s*(\d+)$/, 1] || "30").to_i,
-      "build-mode" => text[/^\s+build-mode:\s*([^\s]+)$/, 1].to_s,
+      "build-mode" => unquote_scalar(text[/^\s+build-mode:\s*([^\s]+)$/, 1]).to_s,
       "build-profile" => extract_build_profile(text),
       "schedule" => text[/cron:\s*"([^"]+)"/, 1]
     }.reject { |_key, value| blank?(value) }
   end
 
   def derive_pinprick_audit
-    text = read_path(repo_path(".github/workflows/pinprick-audit.yml"))
+    path = ".github/workflows/pinprick-audit.yml"
+    data = workflow_data(path)
+    if (caller = reusable_caller(data, "pinprick-audit"))
+      with = caller.fetch("with", {})
+      return {
+        "advanced-security" => derived_advanced_security(with.fetch("advanced-security", SAME_ORG_ADVANCED_SECURITY)),
+        "fail-on-findings" => with.fetch("fail-on-findings", true),
+        "timeout-minutes" => derived_timeout_from_value(with.fetch("timeout-minutes", 15)),
+        "push-paths" => workflow_paths(data, "push")
+      }.reject { |_key, value| blank?(value) }
+    end
+
+    text = read_path(repo_path(path))
     {
       "advanced-security" => text[/^\s+advanced-security:\s*(.+)$/, 1]&.strip || SAME_ORG_ADVANCED_SECURITY,
       "fail-on-findings" => (text[/^\s+fail-on-findings:\s*(.+)$/, 1]&.strip || "true") == "true",
-      "push-paths" => extract_push_paths_after_push(text),
-      "timeout-minutes" => derived_timeout(text)
+      "timeout-minutes" => derived_timeout(text),
+      "push-paths" => extract_push_paths_after_push(text)
     }.reject { |_key, value| blank?(value) }
   end
 
   def derive_zizmor
-    text = read_path(repo_path(".github/workflows/zizmor.yml"))
+    path = ".github/workflows/zizmor.yml"
+    data = workflow_data(path)
+    if (caller = reusable_caller(data, "zizmor"))
+      with = caller.fetch("with", {})
+      return {
+        "push-paths" => workflow_paths(data, "push").reject { |path| path == ".github/workflows/**" },
+        "schedule" => workflow_schedule(data),
+        "timeout-minutes" => derived_timeout_from_value(with.fetch("timeout-minutes", 15))
+      }.reject { |_key, value| blank?(value) }
+    end
+
+    text = read_path(repo_path(path))
     {
       "push-paths" => extract_list_after(text, "push", "paths").reject { |path| path == ".github/workflows/**" },
       "schedule" => text[/cron:\s*"([^"]+)"/, 1],
@@ -415,6 +489,17 @@ class FleetSync
     timeout == 15 ? nil : timeout
   end
 
+  def derived_timeout_from_value(value)
+    timeout = value.to_i
+    timeout == 15 ? nil : timeout
+  end
+
+  def derived_advanced_security(value)
+    return value.to_s if value == true || value == false
+
+    value
+  end
+
   def derive_readme
     path = repo_path("README.md")
     return {} unless path.file?
@@ -422,7 +507,8 @@ class FleetSync
     text = read_path(path)
     result = {}
 
-    badge_lines = text.lines.select { |line| line.start_with?("[![") }.map(&:chomp)
+    badges_text = marked_block_body(text, "badges") || text
+    badge_lines = badges_text.lines.select { |line| line.start_with?("[![") }.map(&:chomp)
     ci_badge = badge_lines.find { |line| line.include?("/actions/workflows/") }
     if ci_badge
       workflow = ci_badge[%r{/actions/workflows/([^/]+)/badge\.svg}, 1]
@@ -432,13 +518,72 @@ class FleetSync
       result["badges"] = { "workflow" => workflow, "extra" => extra }
     end
 
-    if (section = text[/^## License\n\n.*?(?=^## |\z)/m])
+    license_text = marked_block_body(text, "license-section") || text
+    if (section = license_text[/^## License\n\n.*?(?=^## |\z)/m])
       body = section.sub(/^## License\n\n/, "").strip
       default = default_readme_license(config_license: derive_license)
       result["license"] = body == default ? {} : { "text" => body }
     end
 
     result
+  end
+
+  def workflow_data(relative_path)
+    YAML.safe_load(read_path(repo_path(relative_path)), permitted_classes: [], aliases: false)
+  end
+
+  def workflow_on(data)
+    data["on"] || data[true] || {}
+  end
+
+  def workflow_paths(data, event)
+    event_data = workflow_on(data)[event]
+    return [] unless event_data.is_a?(Hash)
+
+    Array(event_data["paths"])
+  end
+
+  def workflow_schedule(data)
+    schedules = workflow_on(data)["schedule"]
+    first = Array(schedules).first
+    first["cron"] if first.is_a?(Hash)
+  end
+
+  def workflow_concurrency_group(data)
+    concurrency = data["concurrency"]
+    return concurrency if concurrency.is_a?(String)
+
+    concurrency["group"] if concurrency.is_a?(Hash)
+  end
+
+  def reusable_caller(data, workflow_name)
+    jobs = data["jobs"]
+    return nil unless jobs.is_a?(Hash)
+
+    jobs.values.find do |job|
+      job.is_a?(Hash) &&
+        job["uses"].to_s.include?("starhaven-io/.github/.github/workflows/reusable-#{workflow_name}.yml@")
+    end
+  end
+
+  def parse_json_array(value)
+    parsed = value.is_a?(Array) ? value : JSON.parse(value.to_s)
+    raise FleetError, "workflow caller languages must be a JSON array" unless parsed.is_a?(Array)
+
+    parsed
+  end
+
+  def marked_block_body(text, block_name)
+    match = text.match(/^<!-- fleet:block #{Regexp.escape(block_name)} -->\n(?<body>.*?)^<!-- fleet:end -->/m)
+    return nil unless match
+
+    match[:body].strip
+  end
+
+  def unquote_scalar(value)
+    return nil if value.nil?
+
+    value.delete_prefix("\"").delete_suffix("\"")
   end
 
   def extract_build_profile(text)
@@ -685,7 +830,7 @@ class FleetSync
     config.fetch("exceptions", {}).key?(surface)
   end
 
-  def reusable_pin(workflow_name)
+  def reusable_pin(workflow_name, required_inputs: [])
     current = repo_path(".github/workflows/#{workflow_name}.yml")
     if current.file?
       text = read_path(current)
@@ -693,24 +838,57 @@ class FleetSync
       version = text[/starhaven-io\/\.github\/\.github\/workflows\/reusable-[^@]+@[0-9a-f]{40}\s+#\s+(v\d+(?:\.\d+){2,3})/, 1]
       if sha && version
         tag_sha = version_commit(version)
-        # Preserve a pin only while its version comment still names the pinned
-        # commit; an unresolvable tag gets the benefit of the doubt so strict
-        # runs without tag data stay silent. Dependabot moves valid pins
-        # forward; sync repairs lying ones.
-        return [sha, version] if tag_sha.nil? || tag_sha == sha
+        if reusable_pin_valid?(workflow_name, sha, tag_sha, required_inputs)
+          return [sha, version] if tag_sha == sha || (tag_sha.nil? && !hub_has_tag_data?)
+        end
       end
     end
 
     [version_commit(fleet_version) || ENV["FLEET_HUB_SHA"] || git_hub_sha, fleet_version]
   end
 
+  def reusable_pin_valid?(workflow_name, sha, tag_sha, required_inputs)
+    return false if tag_sha && tag_sha != sha
+    return false if tag_sha.nil? && hub_has_tag_data?
+
+    missing_inputs = required_inputs - reusable_inputs(workflow_name, sha)
+    missing_inputs.empty?
+  end
+
+  def reusable_inputs(workflow_name, sha)
+    @reusable_inputs ||= {}
+    key = [workflow_name, sha]
+    return @reusable_inputs[key] if @reusable_inputs.key?(key)
+
+    stdout, _stderr, status = Open3.capture3(
+      "git", "-C", @hub_root.to_s, "show", "#{sha}:.github/workflows/reusable-#{workflow_name}.yml"
+    )
+    unless status.success?
+      @reusable_inputs[key] = []
+      return @reusable_inputs[key]
+    end
+
+    data = YAML.safe_load(stdout, permitted_classes: [], aliases: false)
+    workflow_call = (data["on"] || data[true] || {})["workflow_call"] || {}
+    @reusable_inputs[key] = workflow_call.fetch("inputs", {}).keys
+  rescue Psych::Exception
+    @reusable_inputs[key] = []
+  end
+
   def version_commit(version)
     @version_commits ||= {}
     return @version_commits[version] if @version_commits.key?(version)
 
-    stdout, status = Open3.capture2("git", "-C", @hub_root.to_s, "rev-list", "-n1", "refs/tags/#{version}")
+    stdout, _stderr, status = Open3.capture3("git", "-C", @hub_root.to_s, "rev-list", "-n1", "refs/tags/#{version}")
     sha = stdout.strip
     @version_commits[version] = status.success? && !sha.empty? ? sha : nil
+  end
+
+  def hub_has_tag_data?
+    return @hub_has_tag_data unless @hub_has_tag_data.nil?
+
+    stdout, _stderr, status = Open3.capture3("git", "-C", @hub_root.to_s, "tag", "--list", "v*")
+    @hub_has_tag_data = status.success? && !stdout.strip.empty?
   end
 
   def fleet_version

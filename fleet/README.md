@@ -13,6 +13,10 @@ artifacts instead of hand-synchronized copies.
   workflows in `.github/workflows/`.
 - Tier 4 files remain repo-owned and are not touched by `fleet/sync.rb`.
 
+Optional Tier 1 files are still byte-identical, but render only when the
+consumer opts in through `.fleet.yml`. The shared `.github/zizmor.yml` policy
+uses `zizmor-config: true`.
+
 The renderer fails on missing or mangled markers in normal mode. The sync
 workflow uses bootstrap mode only when the consumer checkout has no
 `.fleet.yml`. Bootstrap mode derives an initial config from the converged repo
@@ -38,6 +42,7 @@ params:
   link-check:
     targets: "README.md AGENTS.md"
     build-site: false
+  zizmor-config: true
   readme:
     badges:
       workflow: "ci.yml"
@@ -66,6 +71,11 @@ seeds new pins at the current release's tag commit (falling back to the sync
 push SHA only on the release push itself, which then receives the tag),
 preserves valid pins even when newer releases exist, and repairs pins whose
 comment does not name the pinned commit. Dependabot moves valid pins forward.
+If rendered inputs require a newer reusable workflow than the pinned SHA
+defines, the renderer treats the pin as invalid and reseeds it to the current
+release tag. If a version comment names a tag that cannot resolve, the renderer
+repairs it when the hub has tag data and preserves it only when the hub checkout
+has no fleet tags at all.
 
 ## Running Locally
 
