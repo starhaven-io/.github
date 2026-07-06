@@ -110,6 +110,7 @@ class FleetSync
   def run
     config = load_config
     validate_config(config)
+    assert_unique_marked_blocks(config)
 
     return run_guard(config) if @guard_base
 
@@ -151,7 +152,9 @@ class FleetSync
 
   def load_config
     path = repo_path(".fleet.yml")
-    if path.file?
+    raise FleetError, non_regular_file_message(".fleet.yml") if managed_path_present?(path) && !regular_file?(path)
+
+    if regular_file?(path)
       text = read_path(path)
       validate_config_text(text, ".fleet.yml")
       begin
@@ -904,6 +907,38 @@ class FleetSync
     "#{block.fetch(:path)}:#{block.fetch(:name)}"
   end
 
+  # A managed block must appear exactly once: guard and renderer both act on the
+  # first marker match, so a duplicate could hide an edit behind the first copy.
+  def assert_unique_marked_blocks(config)
+    guard_managed_blocks(config).each do |block|
+      path = repo_path(block.fetch(:path))
+      next unless managed_path_present?(path)
+
+      raise FleetError, non_regular_file_message(block.fetch(:path)) unless regular_file?(path)
+
+      count = read_path(path).scan(block_start_marker(block.fetch(:name), block.fetch(:style))).length
+      next if count <= 1
+
+      raise FleetError, duplicate_marker_message(block, count)
+    end
+  end
+
+  def block_start_marker(block_name, style)
+    case style
+    when :markdown
+      /^<!-- fleet:block #{Regexp.escape(block_name)} -->$/
+    when :hash
+      /^# fleet:block #{Regexp.escape(block_name)}$/
+    else
+      raise FleetError, "unknown marker style #{style}"
+    end
+  end
+
+  def duplicate_marker_message(block, count)
+    "#{block.fetch(:path)} has #{count} '#{block.fetch(:name)}' fleet:block markers; " \
+      "a managed block must appear exactly once so an edited duplicate cannot hide behind the first."
+  end
+
   def config_params(config)
     params = config["params"]
     params.is_a?(Hash) ? params : {}
@@ -978,7 +1013,7 @@ class FleetSync
 
   def current_marked_block(block)
     path = repo_path(block.fetch(:path))
-    return nil unless path.file?
+    return nil unless regular_file?(path)
 
     marked_block_from_text(read_path(path), block.fetch(:name), block.fetch(:style))
   end
@@ -1151,7 +1186,8 @@ class FleetSync
 
   def replace_marked_block(relative_path, block_name, style, body)
     path = repo_path(relative_path)
-    raise FleetError, "#{relative_path} is missing" unless path.file?
+    raise FleetError, "#{relative_path} is missing" unless managed_path_present?(path)
+    raise FleetError, non_regular_file_message(relative_path) unless regular_file?(path)
 
     current = read_path(path)
     replacement = fenced_block(block_name, style, body)
@@ -1171,7 +1207,8 @@ class FleetSync
 
   def replace_just_recipe(block_name, body)
     path = repo_path("justfile")
-    raise FleetError, "justfile is missing" unless path.file?
+    raise FleetError, "justfile is missing" unless managed_path_present?(path)
+    raise FleetError, non_regular_file_message("justfile") unless regular_file?(path)
 
     current = read_path(path)
     replacement = fenced_block(block_name, :hash, body)
@@ -1290,19 +1327,21 @@ class FleetSync
   def write_file(relative_path, content, surface)
     content = "#{content}\n" unless content.end_with?("\n")
     path = repo_path(relative_path)
-    current = path.file? ? read_path(path) : nil
+    # A managed file must be a real file: a symlink to canonical bytes is drift, not a match.
+    current = regular_file?(path) ? read_path(path) : nil
     return if current == content
 
     @changes << surface
     return if @check
 
     FileUtils.mkdir_p(path.dirname)
+    File.unlink(path) if path.symlink?
     write_path(path, content)
   end
 
   def chmod_executable(relative_path)
     path = repo_path(relative_path)
-    return unless path.file?
+    return unless regular_file?(path)
 
     if @check
       @changes << relative_path unless path.executable?
@@ -1457,6 +1496,18 @@ class FleetSync
 
   def hub_path(relative)
     @hub_root.join("fleet", relative)
+  end
+
+  def regular_file?(path)
+    !path.symlink? && path.file?
+  end
+
+  def managed_path_present?(path)
+    path.exist? || path.symlink?
+  end
+
+  def non_regular_file_message(relative_path)
+    "#{relative_path} is not a regular file"
   end
 
   def read_path(path)
