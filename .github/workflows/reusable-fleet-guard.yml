@@ -49,6 +49,10 @@ jobs:
           repository: starhaven-io/.github
           ref: ${{ inputs.hub-ref }}
           path: hub
+          # Pin validation reads other pinned commits and tags from this
+          # checkout; a shallow clone makes every pin look invalid.
+          fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
 
       - name: Guard fleet-managed surfaces
