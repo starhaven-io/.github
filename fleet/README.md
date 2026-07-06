@@ -156,23 +156,16 @@ compare mixed-arity versions, so a bare day tag strands pins (tags from
 2026-07-05 predate this rule and stay as they are).
 
 Consumer callers pin reusable workflows by hub commit SHA with a fleet version
-comment, and the comment's tag must point at the pinned SHA. `fleet/sync.rb`
-seeds new pins at the current release's tag commit (falling back to the sync
-push SHA only on the release push itself, which then receives the tag),
-preserves valid pins even when newer releases exist, and repairs pins whose
-comment does not name the pinned commit. Dependabot moves valid pins forward:
-sync owns file shape and pin validity, Dependabot owns version flow. If
-rendered inputs require a newer reusable workflow than the pinned SHA defines,
-the renderer treats the pin as invalid and reseeds it to the current release
-tag. If a version comment names a tag that cannot resolve, the renderer repairs
-it when the hub has tag data and preserves it only when the hub checkout has no
-fleet tags at all.
+comment. The sync is the only writer for fleet pins: every render seeds every
+caller at the current release tag (falling back to the sync push SHA only on
+the release push itself, which then receives the tag), so each release is one
+PR per consumer carrying canon changes and pin movement together. Dependabot
+ignores `starhaven-io/.github` refs entirely and owns third-party dependencies
+only.
 
 This hub is the seven-day supply-chain quarantine for everything first-party.
-Consumer `github-actions` Dependabot cooldown keeps `default-days: 7` but
-excludes `starhaven-io/*`: fleet pin bumps and first-party action releases are
-already reviewed in their own repos and converge without a second quarantine.
-Third-party actions keep the full cooldown.
+Consumer Dependabot keeps its cooldown for third-party actions and never
+writes fleet pins; upstream changes reach consumers only as fleet releases.
 
 Fleet releases are cut through `fleet-release.yml`. Manual dispatch opens a
 release PR that bumps `fleet/VERSION` to the next Pacific CalVer tag name. The
@@ -205,14 +198,13 @@ consistent; direct edits to managed files or blocks fail with a pointer back to
 this hub or to `.fleet.yml` parameters. Sync-bot and Dependabot PRs are exempt,
 and the job always reports a conclusion so the check can be required.
 
-The guard reads its hub version from the caller's own `uses:` pin in the
-consumer checkout: Dependabot maintains only the `uses:` line, so any input
-duplicating that SHA would desync on every bump. In this hub the guard checks a
-PR against its own in-tree canon, since a hub PR carries the canon it proposes.
-A consumer guard pinned at an older fleet release checks against that older
-canon, so a PR made between a canon change and the guard pin bump can fail if
-it changes parameters plus rendered output; bump the fleet pins first in that
-case.
+The guard reads its hub version from the caller pin in the consumer checkout,
+and in this hub it checks a PR against its own in-tree canon, since a hub PR
+carries the canon it proposes. Stage two fails only on surfaces the PR itself
+touched: drift that predates the branch belongs to the sync, not to the
+author. A PR that pairs parameter changes with output rendered under a newer
+canon than the guard pin may still need the fleet pins bumped first; that
+window closes with the next sync.
 
 ## Security Posture
 

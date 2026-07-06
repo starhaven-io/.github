@@ -3,10 +3,6 @@ name: Reusable Fleet Guard
 on:
   workflow_call:
     inputs:
-      hub-ref:
-        type: string
-        default: ""
-        description: Unused; the guard reads the caller pin from the consumer checkout.
       repo-name:
         type: string
         required: true

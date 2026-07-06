@@ -24,6 +24,11 @@ updates:
       exclude:
         - "starhaven-io/*"
 <% end -%>
+<% if entry.fetch("package-ecosystem") == "github-actions" -%>
+    ignore:
+      # Fleet pins are owned by the sync; Dependabot never writes them.
+      - dependency-name: "starhaven-io/.github/*"
+<% end -%>
     groups:
       <%= entry.fetch("group") %>:
         patterns:

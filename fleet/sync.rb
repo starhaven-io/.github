@@ -39,8 +39,6 @@ class FleetSync
   SAME_ORG_ADVANCED_SECURITY =
     "${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}"
 
-  REUSABLE_REF_PREFIX = "starhaven-io/\\.github/\\.github/workflows/reusable-"
-
   TIER1_FILES = {
     ".editorconfig" => "files/editorconfig",
     ".githooks/commit-msg" => "files/commit-msg",
@@ -112,7 +110,11 @@ class FleetSync
       raise FleetError, guard_failure_message(managed_changes)
     end
 
-    raise FleetError, guard_failure_message(managed_changes) if @changes.any?
+    # Only surfaces this pull request touched can fail it; drift that
+    # predates the branch belongs to the sync, not to the author.
+    touched = guard_changed_paths
+    flagged = @changes.select { |surface| touched.include?(surface.split(":").first) }
+    raise FleetError, guard_failure_message(flagged) if flagged.any?
   end
 
   def load_config
@@ -229,7 +231,7 @@ class FleetSync
   end
 
   def render_fleet_guard
-    ref, version = reusable_pin("fleet-guard", required_inputs: %w[hub-ref repo-name])
+    ref, version = reusable_pin
     write_file(
       ".github/workflows/fleet-guard.yml",
       render_template(
@@ -243,9 +245,7 @@ class FleetSync
 
   def render_zizmor(zizmor_config)
     timeout_minutes = zizmor_config.fetch("timeout-minutes", 15)
-    required_inputs = []
-    required_inputs << "timeout-minutes" if timeout_minutes != 15
-    ref, version = reusable_pin("zizmor", required_inputs: required_inputs)
+    ref, version = reusable_pin
     write_file(
       ".github/workflows/zizmor.yml",
       render_template(
@@ -267,9 +267,7 @@ class FleetSync
     push_paths = pinprick_config.fetch("push-paths", nil)
     timeout_minutes = pinprick_config.fetch("timeout-minutes", 15)
 
-    required_inputs = %w[advanced-security fail-on-findings]
-    required_inputs << "timeout-minutes" if timeout_minutes != 15
-    ref, version = reusable_pin("pinprick-audit", required_inputs: required_inputs)
+    ref, version = reusable_pin
     write_file(
       ".github/workflows/pinprick-audit.yml",
       render_template(
@@ -286,7 +284,7 @@ class FleetSync
   end
 
   def render_link_check(link_config)
-    ref, version = reusable_pin("link-check", required_inputs: %w[args build-site site-directory authenticated-github])
+    ref, version = reusable_pin
     write_file(
       ".github/workflows/link-check.yml",
       render_template(
@@ -310,8 +308,7 @@ class FleetSync
     languages = codeql["languages"] || params["codeql-languages"]
     return unless languages
 
-    ref, version = reusable_pin("codeql",
-                                required_inputs: %w[languages runner timeout-minutes build-mode build-profile])
+    ref, version = reusable_pin
     write_file(
       ".github/workflows/codeql.yml",
       render_template(
@@ -612,13 +609,15 @@ class FleetSync
   end
 
   def guard_changed_paths
+    return @guard_changed_paths if @guard_changed_paths
+
     base = guard_merge_base
     stdout, stderr, status = Open3.capture3(
       "git", "-C", @repo_root.to_s, "diff", "--name-only", "-z", base, "HEAD"
     )
     raise FleetError, "could not diff guard base: #{stderr.strip}" unless status.success?
 
-    stdout.split("\0").reject(&:empty?)
+    @guard_changed_paths = stdout.split("\0").reject(&:empty?)
   end
 
   def guard_merge_base
@@ -981,50 +980,11 @@ class FleetSync
     config.fetch("exceptions", {}).key?(surface)
   end
 
-  def reusable_pin(workflow_name, required_inputs: [])
-    current = repo_path(".github/workflows/#{workflow_name}.yml")
-    if current.file?
-      text = read_path(current)
-      sha = text[/#{REUSABLE_REF_PREFIX}[^@]+@([0-9a-f]{40})/o, 1]
-      version = text[/#{REUSABLE_REF_PREFIX}[^@]+@[0-9a-f]{40}\s+#\s+(v\d+(?:\.\d+){2,3})/o, 1]
-      if sha && version
-        tag_sha = version_commit(version)
-        if reusable_pin_valid?(workflow_name, sha, tag_sha,
-                               required_inputs) && (tag_sha == sha || (tag_sha.nil? && !hub_has_tag_data?))
-          return [sha, version]
-        end
-      end
-    end
-
-    [version_commit(fleet_version) || ENV["FLEET_HUB_SHA"] || git_hub_sha, fleet_version]
-  end
-
-  def reusable_pin_valid?(workflow_name, sha, tag_sha, required_inputs)
-    return false if tag_sha && tag_sha != sha
-    return false if tag_sha.nil? && hub_has_tag_data?
-
-    missing_inputs = required_inputs - reusable_inputs(workflow_name, sha)
-    missing_inputs.empty?
-  end
-
-  def reusable_inputs(workflow_name, sha)
-    @reusable_inputs ||= {}
-    key = [workflow_name, sha]
-    return @reusable_inputs[key] if @reusable_inputs.key?(key)
-
-    stdout, _stderr, status = Open3.capture3(
-      "git", "-C", @hub_root.to_s, "show", "#{sha}:.github/workflows/reusable-#{workflow_name}.yml"
-    )
-    unless status.success?
-      @reusable_inputs[key] = []
-      return @reusable_inputs[key]
-    end
-
-    data = YAML.safe_load(stdout, permitted_classes: [], aliases: false)
-    workflow_call = (data["on"] || data[true] || {})["workflow_call"] || {}
-    @reusable_inputs[key] = workflow_call.fetch("inputs", {}).keys
-  rescue Psych::Exception
-    @reusable_inputs[key] = []
+  # The sync is the only writer for fleet pins: every render seeds every
+  # caller at the current release, so a release is one PR per consumer.
+  # Dependabot ignores hub refs and owns third-party dependencies only.
+  def reusable_pin
+    @reusable_pin ||= [version_commit(fleet_version) || ENV["FLEET_HUB_SHA"] || git_hub_sha, fleet_version]
   end
 
   def version_commit(version)
@@ -1034,13 +994,6 @@ class FleetSync
     stdout, _stderr, status = Open3.capture3("git", "-C", @hub_root.to_s, "rev-list", "-n1", "refs/tags/#{version}")
     sha = stdout.strip
     @version_commits[version] = status.success? && !sha.empty? ? sha : nil
-  end
-
-  def hub_has_tag_data?
-    return @hub_has_tag_data unless @hub_has_tag_data.nil?
-
-    stdout, _stderr, status = Open3.capture3("git", "-C", @hub_root.to_s, "tag", "--list", "v*")
-    @hub_has_tag_data = status.success? && !stdout.strip.empty?
   end
 
   def fleet_version
