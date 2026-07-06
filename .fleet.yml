@@ -2,6 +2,9 @@ schema: 1
 license: "mit"
 params:
   dependabot:
+    - package-ecosystem: "bundler"
+      group: "bundler-dependencies"
+      directory: "/fleet"
     - package-ecosystem: "github-actions"
       group: "github-actions"
       directory: "/"

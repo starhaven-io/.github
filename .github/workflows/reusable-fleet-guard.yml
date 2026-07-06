@@ -55,6 +55,12 @@ jobs:
           fetch-tags: true
           persist-credentials: false
 
+      - name: Set up Ruby
+        if: steps.exemption.outputs.exempt != 'true'
+        uses: ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9 # v1.316.0
+        with:
+          working-directory: hub/fleet
+
       - name: Guard fleet-managed surfaces
         if: steps.exemption.outputs.exempt != 'true'
         env:

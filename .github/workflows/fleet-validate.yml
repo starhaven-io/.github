@@ -33,6 +33,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9 # v1.316.0
+        with:
+          working-directory: fleet
+          bundler-cache: true
+
       - name: Check renderer and templates
         run: |
           ruby -c fleet/sync.rb
@@ -44,6 +50,11 @@ jobs:
               YAML.safe_load(File.read(workflow, encoding: "UTF-8"), permitted_classes: [], aliases: false)
             end
           '
+
+      - name: Lint renderer
+        env:
+          BUNDLE_GEMFILE: fleet/Gemfile
+        run: bundle exec rubocop --no-color fleet/
 
       - name: Build repository matrix
         id: repos
@@ -71,6 +82,11 @@ jobs:
           path: hub
           fetch-tags: true
           persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9 # v1.316.0
+        with:
+          working-directory: hub/fleet
 
       - name: Checkout consumer
         id: clone

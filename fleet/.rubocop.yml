@@ -1,0 +1,23 @@
+AllCops:
+  NewCops: enable
+  Exclude:
+    - "vendor/**/*"
+
+# The renderer's derive and emit methods are long by nature; splitting them
+# to satisfy a metric would hurt readability.
+Metrics:
+  Enabled: false
+
+Style/Documentation:
+  Enabled: false
+
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+
+Style/StringLiteralsInInterpolation:
+  EnforcedStyle: double_quotes
+
+# sync.rb is deliberately one stdlib-only file: consumers never install it,
+# the sync and guard workflows run it straight from a checkout.
+Style/OneClassPerFile:
+  Enabled: false
