@@ -1,0 +1,80 @@
+name: Fleet Guard (required)
+
+# Enforced org-wide by the "Require Fleet Guard" ruleset in orrery, which runs
+# this file from starhaven-io/.github@main against consumer PRs. Because the
+# definition comes from the owner-only hub, not the PR tree, a fork PR cannot
+# fake or skip it. Running current main also applies renderer hardening
+# immediately, without waiting for a release to bump consumers' caller pins.
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: "fleet-guard-required-${{ github.ref }}"
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  guard:
+    name: Guard
+    # The hub guards its own PRs in-tree with --hub; this required workflow is
+    # for consumers, so skip it when it runs on the hub itself.
+    if: github.repository != 'starhaven-io/.github'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check actor exemption
+        id: exemption
+        env:
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [[ "${ACTOR}" == "starhaven-bot[bot]" || "${ACTOR}" == "dependabot[bot]" ]]; then
+            echo "exempt=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exempt=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Checkout consumer
+        if: steps.exemption.outputs.exempt != 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout fleet hub
+        if: steps.exemption.outputs.exempt != 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: starhaven-io/.github
+          ref: main
+          path: hub
+          # Pin resolution reads tags and other pinned commits from this checkout;
+          # a shallow clone makes every pin look invalid.
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up Ruby
+        if: steps.exemption.outputs.exempt != 'true'
+        uses: ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9 # v1.316.0
+        with:
+          working-directory: hub/fleet
+
+      - name: Guard fleet-managed surfaces
+        if: steps.exemption.outputs.exempt != 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          if [[ -z "${BASE_SHA}" ]]; then
+            echo "::error::fleet guard requires a pull_request base SHA"
+            exit 1
+          fi
+          ruby hub/fleet/sync.rb --hub-root hub --repo-root . --repo-name "${REPO_NAME}" --guard "${BASE_SHA}"
