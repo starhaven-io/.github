@@ -1,0 +1,20 @@
+name: Fleet Guard
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: "fleet-guard-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: Guard
+    permissions:
+      contents: read
+    uses: starhaven-io/.github/.github/workflows/reusable-fleet-guard.yml@<%= reusable_ref %> # <%= reusable_version %>
+    with:
+      hub-ref: "<%= reusable_ref %>"
+      repo-name: ${{ github.event.repository.name }}

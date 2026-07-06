@@ -1,0 +1,59 @@
+name: Reusable Fleet Guard
+
+on:
+  workflow_call:
+    inputs:
+      hub-ref:
+        type: string
+        required: true
+      repo-name:
+        type: string
+        required: true
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  guard:
+    name: Guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check actor exemption
+        id: exemption
+        env:
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [[ "${ACTOR}" == "starhaven-bot[bot]" || "${ACTOR}" == "dependabot[bot]" ]]; then
+            echo "exempt=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exempt=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Checkout consumer
+        if: steps.exemption.outputs.exempt != 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout fleet hub
+        if: steps.exemption.outputs.exempt != 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: starhaven-io/.github
+          ref: ${{ inputs.hub-ref }}
+          path: hub
+          persist-credentials: false
+
+      - name: Guard fleet-managed surfaces
+        if: steps.exemption.outputs.exempt != 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REPO_NAME: ${{ inputs.repo-name }}
+        run: ruby hub/fleet/sync.rb --hub-root hub --repo-root . --repo-name "${REPO_NAME}" --guard "${BASE_SHA}"

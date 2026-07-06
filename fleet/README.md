@@ -64,6 +64,7 @@ consumer repo. The shared job bodies live in this hub:
 - `reusable-link-check.yml`
 - `reusable-codeql.yml`
 - `reusable-conventional-commits.yml`
+- `reusable-fleet-guard.yml`
 
 Consumer callers pin reusable workflows by hub commit SHA with a fleet version
 comment, and the comment's tag must point at the pinned SHA. `fleet/sync.rb`
@@ -76,6 +77,31 @@ defines, the renderer treats the pin as invalid and reseeds it to the current
 release tag. If a version comment names a tag that cannot resolve, the renderer
 repairs it when the hub has tag data and preserves it only when the hub checkout
 has no fleet tags at all.
+
+GitHub Actions Dependabot entries keep a seven-day cooldown for third-party
+actions, but exclude `starhaven-io/.github/.github/workflows/reusable-*.yml` so
+fleet release pins can converge without a second consumer-side quarantine.
+
+Fleet releases are cut through `fleet-release.yml`. Manual dispatch opens a
+release PR that bumps `fleet/VERSION` to the next Pacific CalVer tag name. The
+merge to `main` creates an annotated tag for that exact version if it does not
+already exist. Existing tags are never moved.
+
+## Pull Request Guard
+
+Every consumer receives `.github/workflows/fleet-guard.yml`, a required PR check
+that calls `reusable-fleet-guard.yml`. The guard ignores `.fleet.yml` itself,
+then looks for PR changes to tier 1 files, tier 3 rendered files, and the
+content inside tier 2 `fleet:block` markers. If none changed, it exits silently.
+If managed surfaces changed, it runs the renderer in check mode against the PR
+tree. Parameter changes pass when their rendered output is consistent; direct
+edits to managed files or blocks fail with a pointer back to this hub or to
+`.fleet.yml` parameters.
+
+Guard callers are pinned like the other reusable callers. A guard pinned at an
+older fleet release checks against that older canon, so a PR made between a
+canon change and the guard pin bump can fail if it changes parameters plus
+rendered output. Bump the fleet pins first in that case.
 
 ## Running Locally
 
@@ -95,6 +121,12 @@ Check for drift without writing:
 
 ```bash
 ruby fleet/sync.rb --repo-root ../midden --repo-name midden --check
+```
+
+Guard a pull request branch against its base:
+
+```bash
+ruby fleet/sync.rb --repo-root ../midden --repo-name midden --guard origin/main
 ```
 
 Consumer CI never fetches canonical content at runtime. Convergence arrives as a

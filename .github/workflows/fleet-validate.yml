@@ -5,6 +5,7 @@ on:
     paths:
       - "fleet/**"
       - ".github/workflows/reusable-*.yml"
+      - ".github/workflows/fleet-release.yml"
       - ".github/workflows/fleet-sync.yml"
       - ".github/workflows/fleet-validate.yml"
 
