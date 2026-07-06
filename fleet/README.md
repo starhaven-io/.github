@@ -200,11 +200,18 @@ and the job always reports a conclusion so the check can be required.
 
 The guard reads its hub version from the caller pin in the consumer checkout,
 and in this hub it checks a PR against its own in-tree canon, since a hub PR
-carries the canon it proposes. Stage two fails only on surfaces the PR itself
-touched: drift that predates the branch belongs to the sync, not to the
-author. A PR that pairs parameter changes with output rendered under a newer
-canon than the guard pin may still need the fleet pins bumped first; that
-window closes with the next sync.
+carries the canon it proposes. That hub exemption is enabled only from the
+trusted workflow repository context, not from consumer-provided repo naming.
+Stage two fails only on surfaces the PR itself touched: drift that predates the
+branch belongs to the sync, not to the author. A PR that pairs parameter
+changes with output rendered under a newer canon than the guard pin may still
+need the fleet pins bumped first; that window closes with the next sync.
+
+The in-tree guard is an authoring and drift check. It cannot be the sole
+adversarial control for edits to its own caller workflow, because a
+`pull_request` run resolves that caller from the PR tree. Consumers that require
+tamper-resistant enforcement need an org ruleset or required workflow sourced
+from a trusted ref.
 
 ## Security Posture
 

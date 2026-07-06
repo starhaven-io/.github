@@ -7,12 +7,12 @@ on:
 <% if paths && !paths.empty? -%>
     paths:
 <% paths.each do |path| -%>
-      - "<%= path %>"
+      - <%= scalar(path) %>
 <% end -%>
 <% end -%>
 <% if schedule -%>
   schedule:
-    - cron: "<%= schedule %>"
+    - cron: <%= scalar(schedule) %>
   workflow_dispatch:
 <% end -%>
 
@@ -31,7 +31,7 @@ jobs:
     uses: starhaven-io/.github/.github/workflows/reusable-codeql.yml@<%= reusable_ref %> # <%= reusable_version %>
     with:
       languages: <%= single_quoted(languages_json) %>
-      runner: "<%= runner %>"
+      runner: <%= scalar(runner) %>
       timeout-minutes: <%= timeout_minutes %>
-      build-mode: "<%= build_mode %>"
-      build-profile: "<%= build_profile %>"
+      build-mode: <%= scalar(build_mode) %>
+      build-profile: <%= scalar(build_profile) %>

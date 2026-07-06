@@ -7,11 +7,11 @@ on:
     paths:
       - ".github/workflows/**"
 <% push_paths.each do |path| -%>
-      - "<%= path %>"
+      - <%= scalar(path) %>
 <% end -%>
 <% if schedule -%>
   schedule:
-    - cron: "<%= schedule %>"
+    - cron: <%= scalar(schedule) %>
   workflow_dispatch:
 <% end -%>
 
