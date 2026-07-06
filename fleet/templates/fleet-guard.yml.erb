@@ -16,5 +16,4 @@ jobs:
       contents: read
     uses: starhaven-io/.github/.github/workflows/reusable-fleet-guard.yml@<%= reusable_ref %> # <%= reusable_version %>
     with:
-      hub-ref: "<%= reusable_ref %>"
       repo-name: ${{ github.event.repository.name }}
