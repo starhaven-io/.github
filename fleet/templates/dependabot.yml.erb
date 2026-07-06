@@ -1,19 +1,19 @@
 version: 2
 updates:
 <% dependabot_entries.each_with_index do |entry, index| -%>
-  - package-ecosystem: "<%= entry.fetch("package-ecosystem") %>"
+  - package-ecosystem: <%= scalar(entry.fetch("package-ecosystem")) %>
 <% if entry.key?("directory") -%>
-    directory: "<%= entry.fetch("directory") %>"
+    directory: <%= scalar(entry.fetch("directory")) %>
 <% elsif entry.key?("directories") -%>
     directories:
 <% entry.fetch("directories").each do |directory| -%>
-      - "<%= directory %>"
+      - <%= scalar(directory) %>
 <% end -%>
 <% end -%>
 <% if entry["allow"] -%>
     allow:
 <% entry.fetch("allow").each do |allow| -%>
-      - dependency-type: "<%= allow.fetch("dependency-type") %>"
+      - dependency-type: <%= scalar(allow.fetch("dependency-type")) %>
 <% end -%>
 <% end -%>
     schedule:
@@ -30,7 +30,7 @@ updates:
       - dependency-name: "starhaven-io/.github/*"
 <% end -%>
     groups:
-      <%= entry.fetch("group") %>:
+      <%= scalar(entry.fetch("group")) %>:
         patterns:
           - "*"
 <% end -%>

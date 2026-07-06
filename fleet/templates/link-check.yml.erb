@@ -5,17 +5,17 @@ on:
   pull_request:
     paths:
 <% pull_request_paths.each do |path| -%>
-      - "<%= path %>"
+      - <%= scalar(path) %>
 <% end -%>
 <% end -%>
   schedule:
-    - cron: "<%= schedule %>"<% if schedule == "0 14 * * 1" %> # every Monday at 14:00 UTC<% end %>
+    - cron: <%= scalar(schedule) %><% if schedule == "0 14 * * 1" %> # every Monday at 14:00 UTC<% end %>
   workflow_dispatch:
 
 permissions: {}
 
 concurrency:
-  group: <%= concurrency_group %>
+  group: <%= scalar(concurrency_group) %>
   cancel-in-progress: true
 
 jobs:
@@ -27,5 +27,5 @@ jobs:
     with:
       args: <%= scalar(args) %>
       build-site: <%= build_site %>
-      site-directory: "<%= site_directory %>"
+      site-directory: <%= scalar(site_directory) %>
       authenticated-github: <%= authenticated_github %>

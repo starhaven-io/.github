@@ -7,7 +7,7 @@ updates:
     cooldown:
       default-days: 7
     groups:
-      bundler-dependencies:
+      "bundler-dependencies":
         patterns:
           - "*"
   - package-ecosystem: "github-actions"
@@ -22,6 +22,6 @@ updates:
       # Fleet pins are owned by the sync; Dependabot never writes them.
       - dependency-name: "starhaven-io/.github/*"
     groups:
-      github-actions:
+      "github-actions":
         patterns:
           - "*"

@@ -10,7 +10,7 @@ on:
 <% if push_paths && !push_paths.empty? -%>
     paths:
 <% push_paths.each do |path| -%>
-      - "<%= path %>"
+      - <%= scalar(path) %>
 <% end -%>
 <% end -%>
 
