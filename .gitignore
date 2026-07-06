@@ -5,3 +5,7 @@
 .DS_Store
 .vscode/
 # fleet:end
+
+# Bundler installs for the fleet renderer toolchain
+fleet/vendor/
+fleet/.bundle/

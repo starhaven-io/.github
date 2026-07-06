@@ -40,6 +40,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9 # v1.316.0
+        with:
+          working-directory: fleet
+
       - name: Build repository matrix
         id: repos
         env:
@@ -76,6 +81,11 @@ jobs:
           path: hub
           fetch-tags: true
           persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9 # v1.316.0
+        with:
+          working-directory: hub/fleet
 
       - name: Mint read token
         id: read-token

@@ -7,7 +7,6 @@ require "fileutils"
 require "json"
 require "optparse"
 require "open3"
-require "pathname"
 require "yaml"
 
 class FleetError < StandardError; end
@@ -27,7 +26,7 @@ class TemplateContext
       indented = value.lines.map { |line| line == "\n" ? line : "        #{line}" }.join
       "|-\n#{indented}"
     else
-      "\"#{value.gsub("\\", "\\\\\\").gsub("\"", "\\\"")}\""
+      "\"#{value.gsub(/["\\]/) { |char| "\\#{char}" }}\""
     end
   end
 
@@ -38,7 +37,9 @@ end
 
 class FleetSync
   SAME_ORG_ADVANCED_SECURITY =
-    "${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}".freeze
+    "${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}"
+
+  REUSABLE_REF_PREFIX = "starhaven-io/\\.github/\\.github/workflows/reusable-"
 
   TIER1_FILES = {
     ".editorconfig" => "files/editorconfig",
@@ -116,9 +117,7 @@ class FleetSync
 
   def load_config
     path = repo_path(".fleet.yml")
-    if path.file?
-      return YAML.safe_load(read_path(path), permitted_classes: [], aliases: false)
-    end
+    return YAML.safe_load(read_path(path), permitted_classes: [], aliases: false) if path.file?
 
     raise FleetError, ".fleet.yml is missing; rerun with --bootstrap to seed it" unless @bootstrap
 
@@ -132,9 +131,7 @@ class FleetSync
     raise FleetError, ".fleet.yml schema must be 1" unless config["schema"] == 1
 
     license = config["license"]
-    unless %w[agpl mit none].include?(license)
-      raise FleetError, ".fleet.yml license must be agpl, mit, or none"
-    end
+    raise FleetError, ".fleet.yml license must be agpl, mit, or none" unless %w[agpl mit none].include?(license)
 
     params = config["params"] || {}
     exceptions = config["exceptions"] || {}
@@ -148,9 +145,7 @@ class FleetSync
     end
 
     license = config.fetch("license")
-    if license != "none"
-      write_file("LICENSE", read_path(hub_path(LICENSE_FILES.fetch(license))), "LICENSE")
-    end
+    write_file("LICENSE", read_path(hub_path(LICENSE_FILES.fetch(license))), "LICENSE") if license != "none"
 
     params = config.fetch("params", {})
     write_file(".mcp.json", read_path(hub_path("files/mcp.json")), ".mcp.json") if params["astro-docs"]
@@ -186,7 +181,9 @@ class FleetSync
 
     replace_just_recipe("install-hooks", read_path(hub_path("blocks/install-hooks.just")))
     replace_just_recipe("audit", read_path(hub_path("blocks/audit.just"))) unless exception?(config, "audit")
-    replace_just_recipe("pinprick-audit", read_path(hub_path("blocks/pinprick-audit.just"))) unless exception?(config, "pinprick-audit-recipe")
+    unless exception?(config, "pinprick-audit-recipe")
+      replace_just_recipe("pinprick-audit", read_path(hub_path("blocks/pinprick-audit.just")))
+    end
 
     readme = params["readme"] || {}
     if readme["badges"]
@@ -200,16 +197,16 @@ class FleetSync
       replace_marked_block("README.md", "badges", :markdown, badges)
     end
 
-    if readme["license"]
-      license_block = readme.fetch("license")
-      body = render_template(
-        "readme-license.md.erb",
-        license: config.fetch("license"),
-        license_text: license_block["text"],
-        extra_license_lines: license_block.fetch("extra", [])
-      )
-      replace_marked_block("README.md", "license-section", :markdown, body)
-    end
+    return unless readme["license"]
+
+    license_block = readme.fetch("license")
+    body = render_template(
+      "readme-license.md.erb",
+      license: config.fetch("license"),
+      license_text: license_block["text"],
+      extra_license_lines: license_block.fetch("extra", [])
+    )
+    replace_marked_block("README.md", "license-section", :markdown, body)
   end
 
   def render_tier3(config)
@@ -263,14 +260,14 @@ class FleetSync
     )
   end
 
-  def render_pinprick_audit(pinprick_config, config)
+  def render_pinprick_audit(pinprick_config, _config)
     advanced_security = pinprick_config.fetch("advanced-security", SAME_ORG_ADVANCED_SECURITY)
     advanced_security = advanced_security == "true" if %w[true false].include?(advanced_security)
     fail_on_findings = pinprick_config.fetch("fail-on-findings", true)
     push_paths = pinprick_config.fetch("push-paths", nil)
     timeout_minutes = pinprick_config.fetch("timeout-minutes", 15)
 
-    required_inputs = ["advanced-security", "fail-on-findings"]
+    required_inputs = %w[advanced-security fail-on-findings]
     required_inputs << "timeout-minutes" if timeout_minutes != 15
     ref, version = reusable_pin("pinprick-audit", required_inputs: required_inputs)
     write_file(
@@ -308,12 +305,13 @@ class FleetSync
     )
   end
 
-  def render_codeql(params, config)
+  def render_codeql(params, _config)
     codeql = params["codeql"] || {}
     languages = codeql["languages"] || params["codeql-languages"]
     return unless languages
 
-    ref, version = reusable_pin("codeql", required_inputs: %w[languages runner timeout-minutes build-mode build-profile])
+    ref, version = reusable_pin("codeql",
+                                required_inputs: %w[languages runner timeout-minutes build-mode build-profile])
     write_file(
       ".github/workflows/codeql.yml",
       render_template(
@@ -344,17 +342,11 @@ class FleetSync
     params["astro-docs"] = true if repo_path(".mcp.json").file?
     params["zizmor-config"] = true if repo_path(".github/zizmor.yml").file?
 
-    if repo_path(".github/dependabot.yml").file?
-      params["dependabot"] = derive_dependabot
-    end
+    params["dependabot"] = derive_dependabot if repo_path(".github/dependabot.yml").file?
 
-    if repo_path(".github/workflows/link-check.yml").file?
-      params["link-check"] = derive_link_check
-    end
+    params["link-check"] = derive_link_check if repo_path(".github/workflows/link-check.yml").file?
 
-    if repo_path(".github/workflows/codeql.yml").file?
-      params["codeql"] = derive_codeql
-    end
+    params["codeql"] = derive_codeql if repo_path(".github/workflows/codeql.yml").file?
 
     if repo_path(".github/workflows/pinprick-audit.yml").file? && repo_name_for_urls != "pinprick"
       params["pinprick-audit"] = derive_pinprick_audit
@@ -530,7 +522,7 @@ class FleetSync
   end
 
   def derived_advanced_security(value)
-    return value.to_s if value == true || value == false
+    return value.to_s if [true, false].include?(value)
 
     value
   end
@@ -610,7 +602,8 @@ class FleetSync
       { path: "justfile", name: "install-hooks", style: :hash }
     ]
     blocks << { path: "justfile", name: "audit", style: :hash } unless exception?(config, "audit")
-    blocks << { path: "justfile", name: "pinprick-audit", style: :hash } unless exception?(config, "pinprick-audit-recipe")
+    blocks << { path: "justfile", name: "pinprick-audit", style: :hash } unless exception?(config,
+                                                                                           "pinprick-audit-recipe")
 
     readme = params["readme"] || {}
     blocks << { path: "README.md", name: "badges", style: :markdown } if readme["badges"]
@@ -741,13 +734,16 @@ class FleetSync
 
   def extract_list_after(text, parent_key, child_key)
     lines = text.lines
-    parent_index = lines.index { |line| line.match?(/^\s{2}#{Regexp.escape(parent_key)}:/) || line.match?(/^#{Regexp.escape(parent_key)}:/) }
+    parent_index = lines.index do |line|
+      line.match?(/^\s{2}#{Regexp.escape(parent_key)}:/) || line.match?(/^#{Regexp.escape(parent_key)}:/)
+    end
     return [] unless parent_index
 
     child_index = nil
     ((parent_index + 1)...lines.length).each do |index|
       line = lines[index]
       break if line.match?(/^\s{2}[a-zA-Z_-]+:/) && !line.include?("#{child_key}:")
+
       if line.match?(/^\s{4}#{Regexp.escape(child_key)}:/)
         child_index = index
         break
@@ -793,22 +789,28 @@ class FleetSync
   end
 
   def dependabot_entries(raw)
-    if raw.is_a?(Array)
-      return raw.map do |entry|
-        entry = entry.dup
-        entry["group"] ||= DEPENDABOT_GROUPS.fetch(entry.fetch("package-ecosystem"), "#{entry.fetch("package-ecosystem")}-dependencies")
-        entry
+    entries =
+      if raw.is_a?(Array)
+        raw.map do |entry|
+          entry = entry.dup
+          entry["group"] ||= DEPENDABOT_GROUPS.fetch(entry.fetch("package-ecosystem"),
+                                                     "#{entry.fetch("package-ecosystem")}-dependencies")
+          entry
+        end
+      else
+        raw.flat_map do |ecosystem, directories|
+          Array(directories).map do |directory|
+            {
+              "package-ecosystem" => ecosystem,
+              "directory" => directory,
+              "group" => DEPENDABOT_GROUPS.fetch(ecosystem, "#{ecosystem}-dependencies")
+            }
+          end
+        end
       end
-    end
 
-    raw.flat_map do |ecosystem, directories|
-      Array(directories).map do |directory|
-        {
-          "package-ecosystem" => ecosystem,
-          "directory" => directory,
-          "group" => DEPENDABOT_GROUPS.fetch(ecosystem, "#{ecosystem}-dependencies")
-        }
-      end
+    entries.sort_by do |entry|
+      [entry.fetch("package-ecosystem"), entry["directory"].to_s, Array(entry["directories"]).join]
     end
   end
 
@@ -871,7 +873,7 @@ class FleetSync
     pattern = /^#{Regexp.escape(heading)}\n.*?(?:(\n+)(?=^## )|\z)/m
     raise FleetError, "section #{heading} is missing" unless current.match?(pattern)
 
-    current.sub(pattern) do |match|
+    current.sub(pattern) do |_match|
       suffix = Regexp.last_match(1) ? "\n\n" : "\n"
       "#{replacement}#{suffix}"
     end
@@ -879,7 +881,7 @@ class FleetSync
 
   def replace_gitignore_local_state(current, replacement)
     if current.start_with?("# Local machine/editor/agent state\n")
-      current.sub(/\A# Local machine\/editor\/agent state\n.*?(?=\n# |\z)/m, replacement)
+      current.sub(%r{\A# Local machine/editor/agent state\n.*?(?=\n# |\z)}m, replacement)
     else
       "#{replacement}\n\n#{current}"
     end
@@ -904,12 +906,12 @@ class FleetSync
     lines = current.lines
     recipe_index = lines.index { |line| line.match?(/^#{Regexp.escape(block_name)}:/) }
 
-    unless recipe_index
-      return "#{current.chomp}\n\n#{replacement}\n"
-    end
+    return "#{current.chomp}\n\n#{replacement}\n" unless recipe_index
 
     start_index = recipe_index
-    while start_index.positive? && lines[start_index - 1].start_with?("#") && !lines[start_index - 1].start_with?("# fleet:")
+    while start_index.positive? &&
+          lines[start_index - 1].start_with?("#") &&
+          !lines[start_index - 1].start_with?("# fleet:")
       start_index -= 1
     end
 
@@ -951,7 +953,7 @@ class FleetSync
   end
 
   def write_file(relative_path, content, surface)
-    content = content.end_with?("\n") ? content : "#{content}\n"
+    content = "#{content}\n" unless content.end_with?("\n")
     path = repo_path(relative_path)
     current = path.file? ? read_path(path) : nil
     return if current == content
@@ -983,12 +985,13 @@ class FleetSync
     current = repo_path(".github/workflows/#{workflow_name}.yml")
     if current.file?
       text = read_path(current)
-      sha = text[/starhaven-io\/\.github\/\.github\/workflows\/reusable-[^@]+@([0-9a-f]{40})/, 1]
-      version = text[/starhaven-io\/\.github\/\.github\/workflows\/reusable-[^@]+@[0-9a-f]{40}\s+#\s+(v\d+(?:\.\d+){2,3})/, 1]
+      sha = text[/#{REUSABLE_REF_PREFIX}[^@]+@([0-9a-f]{40})/o, 1]
+      version = text[/#{REUSABLE_REF_PREFIX}[^@]+@[0-9a-f]{40}\s+#\s+(v\d+(?:\.\d+){2,3})/o, 1]
       if sha && version
         tag_sha = version_commit(version)
-        if reusable_pin_valid?(workflow_name, sha, tag_sha, required_inputs)
-          return [sha, version] if tag_sha == sha || (tag_sha.nil? && !hub_has_tag_data?)
+        if reusable_pin_valid?(workflow_name, sha, tag_sha,
+                               required_inputs) && (tag_sha == sha || (tag_sha.nil? && !hub_has_tag_data?))
+          return [sha, version]
         end
       end
     end
@@ -1058,7 +1061,8 @@ class FleetSync
   def default_readme_license(config_license:)
     case config_license
     when "agpl"
-      "This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`).\n\nCopyright (C) 2026 Patrick Linnane"
+      "This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) " \
+      "(`AGPL-3.0-only`).\n\nCopyright (C) 2026 Patrick Linnane"
     when "mit"
       "This project is licensed under the [MIT License](LICENSE)."
     else
@@ -1125,7 +1129,7 @@ class FleetSync
   def inline_array?(value)
     value.is_a?(Array) &&
       value.all? { |item| item.is_a?(String) || item.is_a?(Integer) || item == true || item == false } &&
-      value.map(&:to_s).join(", ").length <= 72
+      value.join(", ").length <= 72
   end
 
   def blank?(value)
@@ -1148,7 +1152,7 @@ class FleetSync
   def emit_inline(value)
     case value
     when String
-      "\"#{value.gsub("\\", "\\\\\\").gsub("\"", "\\\"")}\""
+      "\"#{value.gsub(/["\\]/) { |char| "\\#{char}" }}\""
     when TrueClass, FalseClass, Integer
       value.to_s
     when Hash
@@ -1191,7 +1195,9 @@ OptionParser.new do |parser|
   parser.on("--repo-name NAME", "Consumer repository name") { |value| options[:repo_name] = value }
   parser.on("--check", "Report drift without writing") { options[:check] = true }
   parser.on("--bootstrap", "Derive and write an initial .fleet.yml if missing") { options[:bootstrap] = true }
-  parser.on("--guard BASE_REF", "Reject unmanaged edits to fleet-managed surfaces") { |value| options[:guard_base] = value }
+  parser.on("--guard BASE_REF", "Reject unmanaged edits to fleet-managed surfaces") do |value|
+    options[:guard_base] = value
+  end
 end.parse!
 
 begin

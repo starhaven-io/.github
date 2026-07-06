@@ -18,6 +18,11 @@ check:
         skipped+=("$2 (brew install $3)")
     }
     run diff git diff --check
+    if command -v bundle &>/dev/null && BUNDLE_GEMFILE=fleet/Gemfile bundle check &>/dev/null; then
+        run rubocop env BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop fleet/
+    else
+        skip rubocop rubocop rubocop
+    fi
     if command -v zizmor &>/dev/null; then
         run audit zizmor --persona auditor .github/workflows/
     else
@@ -42,6 +47,10 @@ check:
         failed=1
     fi
     exit "$failed"
+
+# Lint the fleet renderer
+rubocop:
+    BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop fleet/
 
 # fleet:block audit
 audit:
