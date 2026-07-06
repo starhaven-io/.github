@@ -57,7 +57,7 @@ jobs:
                 match[1].to_i
               end
             end.compact
-            version = numbers.empty? ? today : "#{today}.#{numbers.max + 1}"
+            version = "#{today}.#{numbers.empty? ? 1 : numbers.max + 1}"
             File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |file| file.puts("version=#{version}") }
           '
 
