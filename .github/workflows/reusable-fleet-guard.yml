@@ -5,7 +5,8 @@ on:
     inputs:
       hub-ref:
         type: string
-        required: true
+        default: ""
+        description: Unused; the guard reads the caller pin from the consumer checkout.
       repo-name:
         type: string
         required: true
@@ -42,12 +43,25 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Read the caller pin
+        id: pin
+        if: steps.exemption.outputs.exempt != 'true' && github.repository != 'starhaven-io/.github'
+        # The uses: pin is the single source of truth for the hub version;
+        # Dependabot maintains it, and a separate input desyncs on bumps.
+        run: |
+          HUB_REF=$(grep -oE "reusable-fleet-guard\.yml@[0-9a-f]{40}" .github/workflows/fleet-guard.yml | head -1 | cut -d@ -f2)
+          if [[ -z "${HUB_REF}" ]]; then
+            echo "::error::could not read the fleet-guard pin from .github/workflows/fleet-guard.yml"
+            exit 1
+          fi
+          echo "ref=${HUB_REF}" >> "${GITHUB_OUTPUT}"
+
       - name: Checkout fleet hub
-        if: steps.exemption.outputs.exempt != 'true'
+        if: steps.exemption.outputs.exempt != 'true' && github.repository != 'starhaven-io/.github'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: starhaven-io/.github
-          ref: ${{ inputs.hub-ref }}
+          ref: ${{ steps.pin.outputs.ref }}
           path: hub
           # Pin validation reads other pinned commits and tags from this
           # checkout; a shallow clone makes every pin look invalid.
@@ -59,11 +73,19 @@ jobs:
         if: steps.exemption.outputs.exempt != 'true'
         uses: ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9 # v1.316.0
         with:
-          working-directory: hub/fleet
+          working-directory: ${{ github.repository == 'starhaven-io/.github' && 'fleet' || 'hub/fleet' }}
 
       - name: Guard fleet-managed surfaces
         if: steps.exemption.outputs.exempt != 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           REPO_NAME: ${{ inputs.repo-name }}
-        run: ruby hub/fleet/sync.rb --hub-root hub --repo-root . --repo-name "${REPO_NAME}" --guard "${BASE_SHA}"
+        # A hub pull request carries its canon in-tree, so the hub checks
+        # against itself; an older pinned canon would fail every
+        # canon-changing pull request by construction.
+        run: |
+          HUB_ROOT=hub
+          if [[ "${GITHUB_REPOSITORY}" == "starhaven-io/.github" ]]; then
+            HUB_ROOT=.
+          fi
+          ruby "${HUB_ROOT}/fleet/sync.rb" --hub-root "${HUB_ROOT}" --repo-root . --repo-name "${REPO_NAME}" --guard "${BASE_SHA}"
