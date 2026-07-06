@@ -18,6 +18,7 @@ check:
         skipped+=("$2 (brew install $3)")
     }
     run diff git diff --check
+    run guard-regressions ruby fleet/guard_regressions.rb
     if command -v bundle &>/dev/null && BUNDLE_GEMFILE=fleet/Gemfile bundle check &>/dev/null; then
         run rubocop env BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop fleet/
     else
@@ -51,6 +52,10 @@ check:
 # Lint the fleet renderer
 rubocop:
     BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop fleet/
+
+# Run fleet guard security regression cases
+guard-regressions:
+    ruby fleet/guard_regressions.rb
 
 # fleet:block audit
 audit:
