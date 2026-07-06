@@ -71,12 +71,13 @@ class FleetSync
 
   attr_reader :changes
 
-  def initialize(hub_root:, repo_root:, repo_name:, check:, bootstrap:)
+  def initialize(hub_root:, repo_root:, repo_name:, check:, bootstrap:, guard_base:)
     @hub_root = Pathname(hub_root).expand_path
     @repo_root = Pathname(repo_root).expand_path
     @repo_name = repo_name
-    @check = check
+    @check = check || !guard_base.nil?
     @bootstrap = bootstrap
+    @guard_base = guard_base
     @changes = []
   end
 
@@ -84,15 +85,34 @@ class FleetSync
     config = load_config
     validate_config(config)
 
-    render_tier1(config)
-    render_tier2(config)
-    render_tier3(config)
+    return run_guard(config) if @guard_base
 
+    render_all(config)
     report_changes
     raise FleetError, "fleet sync drift detected" if @check && @changes.any?
   end
 
   private
+
+  def render_all(config)
+    render_tier1(config)
+    render_tier2(config)
+    render_tier3(config)
+  end
+
+  def run_guard(config)
+    managed_changes = changed_managed_surfaces(config)
+    return if managed_changes.empty?
+
+    @changes.clear
+    begin
+      render_all(config)
+    rescue FleetError
+      raise FleetError, guard_failure_message(managed_changes)
+    end
+
+    raise FleetError, guard_failure_message(managed_changes) if @changes.any?
+  end
 
   def load_config
     path = repo_path(".fleet.yml")
@@ -195,6 +215,8 @@ class FleetSync
   def render_tier3(config)
     params = config.fetch("params", {})
 
+    render_fleet_guard
+
     if params["dependabot"]
       write_file(
         ".github/dependabot.yml",
@@ -207,6 +229,19 @@ class FleetSync
     render_pinprick_audit(params.fetch("pinprick-audit", {}), config) unless exception?(config, "pinprick-audit")
     render_link_check(params.fetch("link-check")) if params["link-check"]
     render_codeql(params, config) unless exception?(config, "codeql")
+  end
+
+  def render_fleet_guard
+    ref, version = reusable_pin("fleet-guard", required_inputs: %w[hub-ref repo-name])
+    write_file(
+      ".github/workflows/fleet-guard.yml",
+      render_template(
+        "fleet-guard.yml.erb",
+        reusable_ref: ref,
+        reusable_version: version
+      ),
+      ".github/workflows/fleet-guard.yml"
+    )
   end
 
   def render_zizmor(zizmor_config)
@@ -528,6 +563,117 @@ class FleetSync
     result
   end
 
+  def changed_managed_surfaces(config)
+    changed_paths = guard_changed_paths
+    return [] if changed_paths.empty?
+
+    managed = []
+    whole_files = managed_whole_files(config)
+    changed_paths.each do |path|
+      managed << path if whole_files.include?(path)
+    end
+
+    guard_managed_blocks(config).each do |block|
+      next unless changed_paths.include?(block.fetch(:path))
+
+      base_block = guard_base_block(block)
+      current_block = current_marked_block(block)
+      managed << "#{block.fetch(:path)}:#{block.fetch(:name)}" if base_block != current_block
+    end
+
+    managed.uniq.sort
+  end
+
+  def managed_whole_files(config)
+    params = config.fetch("params", {})
+    files = TIER1_FILES.keys
+    files << "LICENSE" unless config.fetch("license") == "none"
+    files << ".mcp.json" if params["astro-docs"]
+    OPTIONAL_TIER1_FILES.each do |param, (dest, _source)|
+      files << dest if params[param]
+    end
+
+    files << ".github/workflows/fleet-guard.yml"
+    files << ".github/dependabot.yml" if params["dependabot"]
+    files << ".github/workflows/zizmor.yml" unless exception?(config, "zizmor")
+    files << ".github/workflows/pinprick-audit.yml" unless exception?(config, "pinprick-audit")
+    files << ".github/workflows/link-check.yml" if params["link-check"]
+    files << ".github/workflows/codeql.yml" if (params["codeql"] || {})["languages"] || params["codeql-languages"]
+    files
+  end
+
+  def guard_managed_blocks(config)
+    params = config.fetch("params", {})
+    blocks = [
+      { path: "AGENTS.md", name: "commit-and-pr-conventions", style: :markdown },
+      { path: ".gitignore", name: "local-state", style: :hash },
+      { path: "justfile", name: "install-hooks", style: :hash }
+    ]
+    blocks << { path: "justfile", name: "audit", style: :hash } unless exception?(config, "audit")
+    blocks << { path: "justfile", name: "pinprick-audit", style: :hash } unless exception?(config, "pinprick-audit-recipe")
+
+    readme = params["readme"] || {}
+    blocks << { path: "README.md", name: "badges", style: :markdown } if readme["badges"]
+    blocks << { path: "README.md", name: "license-section", style: :markdown } if readme["license"]
+    blocks
+  end
+
+  def guard_changed_paths
+    base = guard_merge_base
+    stdout, stderr, status = Open3.capture3(
+      "git", "-C", @repo_root.to_s, "diff", "--name-only", "-z", base, "HEAD"
+    )
+    raise FleetError, "could not diff guard base: #{stderr.strip}" unless status.success?
+
+    stdout.split("\0").reject(&:empty?)
+  end
+
+  def guard_merge_base
+    return @guard_merge_base if @guard_merge_base
+
+    stdout, stderr, status = Open3.capture3(
+      "git", "-C", @repo_root.to_s, "merge-base", @guard_base, "HEAD"
+    )
+    raise FleetError, "could not resolve guard base #{@guard_base}: #{stderr.strip}" unless status.success?
+
+    @guard_merge_base = stdout.strip
+  end
+
+  def guard_base_block(block)
+    text = guard_base_file(block.fetch(:path))
+    marked_block_from_text(text, block.fetch(:name), block.fetch(:style))
+  end
+
+  def guard_base_file(path)
+    base = guard_merge_base
+    stdout, _stderr, status = Open3.capture3(
+      "git", "-C", @repo_root.to_s, "show", "#{base}:#{path}"
+    )
+    return nil unless status.success?
+
+    stdout
+  end
+
+  def current_marked_block(block)
+    path = repo_path(block.fetch(:path))
+    return nil unless path.file?
+
+    marked_block_from_text(read_path(path), block.fetch(:name), block.fetch(:style))
+  end
+
+  def marked_block_from_text(text, block_name, style)
+    return nil if text.nil?
+
+    match = text.match(marker_regex(block_name, style))
+    match&.to_s
+  end
+
+  def guard_failure_message(managed_changes)
+    "fleet guard: managed surface change rejected (#{managed_changes.join(", ")}); " \
+      "fleet-managed files and blocks change in starhaven-io/.github, or through .fleet.yml parameters. " \
+      "If this PR combines parameter changes with rendered output after a fleet release, bump the fleet pins first."
+  end
+
   def workflow_data(relative_path)
     YAML.safe_load(read_path(repo_path(relative_path)), permitted_classes: [], aliases: false)
   end
@@ -818,10 +964,13 @@ class FleetSync
   end
 
   def chmod_executable(relative_path)
-    return if @check
-
     path = repo_path(relative_path)
     return unless path.file?
+
+    if @check
+      @changes << relative_path unless path.executable?
+      return
+    end
 
     FileUtils.chmod(0o755, path)
   end
@@ -1031,7 +1180,8 @@ options = {
   repo_root: Dir.pwd,
   repo_name: nil,
   check: false,
-  bootstrap: false
+  bootstrap: false,
+  guard_base: nil
 }
 
 OptionParser.new do |parser|
@@ -1041,6 +1191,7 @@ OptionParser.new do |parser|
   parser.on("--repo-name NAME", "Consumer repository name") { |value| options[:repo_name] = value }
   parser.on("--check", "Report drift without writing") { options[:check] = true }
   parser.on("--bootstrap", "Derive and write an initial .fleet.yml if missing") { options[:bootstrap] = true }
+  parser.on("--guard BASE_REF", "Reject unmanaged edits to fleet-managed surfaces") { |value| options[:guard_base] = value }
 end.parse!
 
 begin

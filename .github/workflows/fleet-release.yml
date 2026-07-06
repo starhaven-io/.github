@@ -1,0 +1,199 @@
+name: Fleet Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "fleet/VERSION"
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+concurrency:
+  group: fleet-release
+  cancel-in-progress: false
+
+jobs:
+  release-pr:
+    name: Release PR
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: starhaven
+      deployment: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Compute next version
+        id: version
+        env:
+          FLEET_RELEASE_TZ: America/Los_Angeles
+        run: |
+          ruby -e '
+            ENV["TZ"] = ENV.fetch("FLEET_RELEASE_TZ")
+            today = Time.now.strftime("v%Y.%m.%d")
+            tags = `git tag --list "#{today}*"`.lines.map(&:strip)
+            numbers = tags.map do |tag|
+              if tag == today
+                0
+              elsif (match = tag.match(/\A#{Regexp.escape(today)}\.(\d+)\z/))
+                match[1].to_i
+              end
+            end.compact
+            version = numbers.empty? ? today : "#{today}.#{numbers.max + 1}"
+            File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |file| file.puts("version=#{version}") }
+          '
+
+      - name: Mint write token
+        id: write-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Create verified release commit and open PR
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          APP_SLUG: ${{ steps.write-token.outputs.app-slug }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          TITLE="chore(fleet): release ${VERSION}"
+          BRANCH="fleet-release-${VERSION}"
+          BOT_USER="${APP_SLUG}[bot]"
+          BOT_ID=$(gh api "/users/${BOT_USER}" --jq .id)
+          BOT_EMAIL="${BOT_ID}+${BOT_USER}@users.noreply.github.com"
+          BASE_SHA=$(git rev-parse HEAD)
+
+          BODY_FILE="${RUNNER_TEMP}/fleet-release-pr-body.md"
+          {
+            echo "Release ${VERSION} of fleet-managed surfaces."
+            echo ""
+            echo "This bumps fleet/VERSION. The merge to main will create the annotated ${VERSION} tag."
+          } > "${BODY_FILE}"
+
+          if gh api "repos/${REPOSITORY}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
+            gh api "repos/${REPOSITORY}/git/refs/heads/${BRANCH}" \
+              -X PATCH \
+              -f "sha=${BASE_SHA}" \
+              -F force=true
+          else
+            gh api "repos/${REPOSITORY}/git/refs" \
+              -X POST \
+              -f "ref=refs/heads/${BRANCH}" \
+              -f "sha=${BASE_SHA}"
+          fi
+
+          CONTENT=$(printf "%s\n" "${VERSION}" | ruby -e 'print [STDIN.read].pack("m0")')
+          ADDITIONS=$(jq -n --arg contents "${CONTENT}" '[{ path: "fleet/VERSION", contents: $contents }]')
+          COMMIT_BODY="Signed-off-by: ${BOT_USER} <${BOT_EMAIL}>"
+
+          jq -n \
+            --arg repo "${REPOSITORY}" \
+            --arg branch "${BRANCH}" \
+            --arg title "${TITLE}" \
+            --arg body "${COMMIT_BODY}" \
+            --arg head "${BASE_SHA}" \
+            --argjson additions "${ADDITIONS}" \
+            '{
+              query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
+              variables: {
+                input: {
+                  branch: { repositoryNameWithOwner: $repo, branchName: $branch },
+                  message: { headline: $title, body: $body },
+                  fileChanges: { additions: $additions },
+                  expectedHeadOid: $head
+                }
+              }
+            }' | gh api graphql --input -
+
+          OPEN_PR=$(gh pr list \
+            --repo "${REPOSITORY}" \
+            --head "${BRANCH}" \
+            --state open \
+            --json number \
+            --jq '.[0].number // ""')
+
+          if [ -n "${OPEN_PR}" ]; then
+            gh pr edit "${OPEN_PR}" --repo "${REPOSITORY}" --title "${TITLE}" --body-file "${BODY_FILE}"
+          else
+            gh pr create --repo "${REPOSITORY}" --base main --head "${BRANCH}" --title "${TITLE}" --body-file "${BODY_FILE}"
+          fi
+
+          gh pr list --repo "${REPOSITORY}" --state open --json number,headRefName \
+            --jq ".[] | select(.headRefName | startswith(\"fleet-release-\")) | select(.headRefName != \"${BRANCH}\") | .number" |
+          while IFS= read -r STALE; do
+            gh pr close "${STALE}" --repo "${REPOSITORY}" --delete-branch \
+              --comment "Superseded by the ${VERSION} release."
+          done
+
+  tag:
+    name: Tag
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: starhaven
+      deployment: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION="$(cat fleet/VERSION)"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Mint write token
+        id: write-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Create release tag
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh api "repos/${REPOSITORY}/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "Tag ${VERSION} already exists."
+            exit 0
+          fi
+
+          TAG_SHA=$(gh api "repos/${REPOSITORY}/git/tags" \
+            -X POST \
+            -f "tag=${VERSION}" \
+            -f "message=Fleet ${VERSION}" \
+            -f "object=${GITHUB_SHA}" \
+            -f "type=commit" \
+            --jq .sha)
+
+          gh api "repos/${REPOSITORY}/git/refs" \
+            -X POST \
+            -f "ref=refs/tags/${VERSION}" \
+            -f "sha=${TAG_SHA}"
