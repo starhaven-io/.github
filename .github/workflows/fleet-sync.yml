@@ -226,6 +226,19 @@ jobs:
             gh pr create --repo "${REPOSITORY}" --base main --head "${BRANCH}" --title "${TITLE}" --body-file "${BODY_FILE}"
           fi
 
+          # Convergence PRs are deterministic re-renders of reviewed hub canon;
+          # let GitHub land them once required checks pass instead of piling up.
+          PR_NUMBER=$(gh pr list \
+            --repo "${REPOSITORY}" \
+            --head "${BRANCH}" \
+            --state open \
+            --json number \
+            --jq '.[0].number // ""')
+          if [ -n "${PR_NUMBER}" ]; then
+            gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --auto --squash \
+              || echo "::warning::could not enable auto-merge for ${REPOSITORY}#${PR_NUMBER}"
+          fi
+
           gh pr list --repo "${REPOSITORY}" --state open --json number,headRefName \
             --jq ".[] | select(.headRefName | startswith(\"fleet-sync-\")) | select(.headRefName != \"${BRANCH}\") | .number" |
           while IFS= read -r STALE; do
