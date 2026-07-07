@@ -88,11 +88,9 @@ consumers do not reformat inside the fence; hash fences stay tight. Markers
 carry the constraint "do not hand-edit inside". A missing or mangled marker
 fails the sync run loudly rather than guessing.
 
-The renderer fails on missing or mangled markers in normal mode. The sync
-workflow uses bootstrap mode only when the consumer checkout has no
-`.fleet.yml`. Bootstrap mode derives an initial config from the converged repo
-state, writes markers around known managed sections, and renders the managed
-surfaces.
+The renderer fails on missing or mangled markers. It also requires each
+consumer to carry a hand-authored `.fleet.yml`; fleet does not derive consumer
+config from existing workflow files.
 
 ## Per-Repo Config
 
@@ -229,12 +227,6 @@ Render a consumer checkout in place:
 
 ```bash
 ruby fleet/sync.rb --repo-root ../midden --repo-name midden
-```
-
-Seed the first `.fleet.yml` and markers for a converged checkout:
-
-```bash
-ruby fleet/sync.rb --repo-root ../midden --repo-name midden --bootstrap
 ```
 
 Check for drift without writing:

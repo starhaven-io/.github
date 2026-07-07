@@ -109,12 +109,7 @@ jobs:
         env:
           FLEET_HUB_SHA: ${{ github.sha }}
           REPO_NAME: ${{ matrix.repo }}
-        run: |
-          if [ -f repo/.fleet.yml ]; then
-            ruby hub/fleet/sync.rb --hub-root hub --repo-root repo --repo-name "${REPO_NAME}"
-          else
-            ruby hub/fleet/sync.rb --hub-root hub --repo-root repo --repo-name "${REPO_NAME}" --bootstrap
-          fi
+        run: ruby hub/fleet/sync.rb --hub-root hub --repo-root repo --repo-name "${REPO_NAME}"
 
       - name: Collect drift
         id: drift
