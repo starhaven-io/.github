@@ -18,7 +18,8 @@ Every fleet-relevant file in every consumer is assigned exactly one tier:
   outside is repo-owned.
 - Tier 3 files are rendered whole files: `dependabot.yml` and thin SHA-pinned
   callers for the reusable workflows in `.github/workflows/`.
-- Tier 4 files remain repo-owned and are not touched by `fleet/sync.rb`.
+- Tier 4 files remain repo-owned, except first-party reusable workflow pin
+  lines are kept current by `fleet/sync.rb`.
 
 Optional Tier 1 files are still byte-identical, but render only when the
 consumer opts in through `.fleet.yml`. The shared `.github/zizmor.yml` policy
@@ -59,11 +60,13 @@ Tier 3 (rendered files and thin callers):
 | `.github/workflows/link-check.yml` | caller of `reusable-link-check.yml` | targets, `build-site`, site directory, schedule |
 | `.github/workflows/codeql.yml` | caller of `reusable-codeql.yml` | languages, paths, runner, build mode and profile |
 | `.github/workflows/fleet-guard.yml` | caller of `reusable-fleet-guard.yml` | none |
-| conventional-commits job | reusable job consumed inside each repo's tier-4 `ci.yml` | none |
+| first-party reusable workflow pins | `uses: starhaven-io/.github/.github/workflows/reusable-*.yml@...` lines in any workflow | sync keeps the SHA and fleet version comment current |
 
 Tier 4 stays repo-owned forever: `ci.yml` cores, release and deploy workflows,
 all AGENTS.md content outside the managed block, README bodies, repo-specific
-justfile recipes, `.fleet.yml` itself, and all source code.
+justfile recipes, `.fleet.yml` itself, and all source code. The only managed
+surface inside repo-owned workflows is a first-party reusable workflow pin line;
+the surrounding job logic remains repo-owned.
 
 ## Marker Convention
 
@@ -177,8 +180,9 @@ push itself.
 `fleet-sync.yml` runs on pushes to `main` touching `fleet/**` or the reusable
 workflows, on a weekly schedule, and by dispatch. Per consumer in
 `fleet/repos.yml` it clones the repo, reads and validates `.fleet.yml`, renders
-tiers 1 through 3, and diffs against the working tree. If anything differs it
-opens or updates a single PR on branch `fleet-sync-<version>` titled
+tiers 1 through 3 plus first-party reusable workflow pins in repo-owned
+workflows, and diffs against the working tree. If anything differs it opens or
+updates a single PR on branch `fleet-sync-<version>` titled
 `chore(fleet): sync managed surfaces <version>`, through a verified
 `createCommitOnBranch` commit; PRs from superseded versions are closed by the
 next sync. The PR body lists each converged surface, and that list is the drift
