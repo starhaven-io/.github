@@ -14,36 +14,38 @@ check:
         fi
     }
     skip() {
-        echo "--- $1 --- skipped ($2 not found)"
-        skipped+=("$2 (brew install $3)")
+        echo "--- $1 --- skipped ($2)"
+        skipped+=("$2; install with: $3")
     }
     run diff git diff --check
-    run guard-regressions ruby fleet/guard_regressions.rb
-    if command -v bundle &>/dev/null && BUNDLE_GEMFILE=fleet/Gemfile bundle check &>/dev/null; then
-        run rubocop env BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop fleet/
+    run guard-regressions ruby fleet/test/guard_regressions_test.rb
+    if ! command -v bundle &>/dev/null; then
+        skip rubocop "bundle not found" "brew install ruby"
+    elif ! BUNDLE_GEMFILE=fleet/Gemfile bundle check &>/dev/null; then
+        skip rubocop "fleet bundle not installed" "BUNDLE_GEMFILE=fleet/Gemfile bundle install"
     else
-        skip rubocop rubocop rubocop
+        run rubocop env BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop --config fleet/.rubocop.yml --cache false fleet/
     fi
     if command -v zizmor &>/dev/null; then
         run audit zizmor --persona auditor .github/workflows/
     else
-        skip audit zizmor zizmor
+        skip audit "zizmor not found" "brew install zizmor"
     fi
     if command -v pinprick &>/dev/null; then
         run pinprick-audit pinprick audit .
     else
-        skip pinprick-audit pinprick pinprick
+        skip pinprick-audit "pinprick not found" "brew install pinprick"
     fi
     if command -v lychee &>/dev/null; then
         run lychee lychee --config lychee.toml README.md profile/README.md CONTRIBUTING.md SECURITY.md
     else
-        skip lychee lychee lychee
+        skip lychee "lychee not found" "brew install lychee"
     fi
     if [ ${#skipped[@]} -gt 0 ]; then
         echo ""
-        echo "Checks skipped due to missing tools:"
+        echo "Checks skipped:"
         for tool in "${skipped[@]}"; do
-            echo "  - $tool"
+          echo "  - $tool"
         done
         failed=1
     fi
@@ -51,11 +53,11 @@ check:
 
 # Lint the fleet renderer
 rubocop:
-    BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop fleet/
+    BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop --config fleet/.rubocop.yml --cache false fleet/
 
 # Run fleet guard security regression cases
 guard-regressions:
-    ruby fleet/guard_regressions.rb
+    ruby fleet/test/guard_regressions_test.rb
 
 # fleet:block audit
 audit:
