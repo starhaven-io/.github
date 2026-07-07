@@ -1,7 +1,6 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require "digest"
 require "erb"
 require "fileutils"
 require "json"
@@ -96,12 +95,11 @@ class FleetSync
 
   attr_reader :changes
 
-  def initialize(hub_root:, repo_root:, repo_name:, check:, bootstrap:, guard_base:, hub: false)
+  def initialize(hub_root:, repo_root:, repo_name:, check:, guard_base:, hub: false)
     @hub_root = Pathname(hub_root).expand_path
     @repo_root = Pathname(repo_root).expand_path
     @repo_name = repo_name
     @check = check || !guard_base.nil?
-    @bootstrap = bootstrap
     @guard_base = guard_base
     @hub = hub
     @changes = []
@@ -164,11 +162,7 @@ class FleetSync
       end
     end
 
-    raise FleetError, ".fleet.yml is missing; rerun with --bootstrap to seed it" unless @bootstrap
-
-    config = derive_config
-    write_file(".fleet.yml", dump_config(config), ".fleet.yml")
-    config
+    raise FleetError, ".fleet.yml is missing; hand-author .fleet.yml before running fleet sync"
   end
 
   def validate_config(config)
@@ -611,231 +605,6 @@ class FleetSync
     )
   end
 
-  def derive_config
-    config = {
-      "schema" => 1,
-      "license" => derive_license,
-      "params" => {},
-      "exceptions" => {}
-    }
-
-    params = config.fetch("params")
-    params["astro-docs"] = true if repo_path(".mcp.json").file?
-    params["zizmor-config"] = true if repo_path(".github/zizmor.yml").file?
-
-    params["dependabot"] = derive_dependabot if repo_path(".github/dependabot.yml").file?
-
-    params["link-check"] = derive_link_check if repo_path(".github/workflows/link-check.yml").file?
-
-    params["codeql"] = derive_codeql if repo_path(".github/workflows/codeql.yml").file?
-
-    if repo_path(".github/workflows/pinprick-audit.yml").file? && repo_name_for_urls != "pinprick"
-      params["pinprick-audit"] = derive_pinprick_audit
-    end
-
-    if repo_path(".github/workflows/zizmor.yml").file? && repo_name_for_urls != "orrery"
-      zizmor = derive_zizmor
-      params["zizmor"] = zizmor unless zizmor.empty?
-    end
-
-    readme = derive_readme
-    params["readme"] = readme unless readme.empty?
-
-    if repo_name_for_urls == "pinprick"
-      config.fetch("exceptions")["pinprick-audit"] =
-        "build-from-source: audits the local checkout (GRAND_PARITY_PASS.md P0.2)"
-      config.fetch("exceptions")["pinprick-audit-recipe"] =
-        "build-from-source: audits the local checkout (GRAND_PARITY_PASS.md P0.2)"
-    elsif repo_name_for_urls == "pinprick-action"
-      config.fetch("exceptions")["pinprick-audit"] =
-        "self-test: the action validates pinprick behavior through its dedicated workflow"
-    end
-
-    if repo_name_for_urls == "orrery"
-      config.fetch("exceptions")["codeql"] = "terraform-only private infra; tofu.yml owns IaC validation"
-      config.fetch("exceptions")["zizmor"] =
-        "private repo without GHAS: no SARIF upload; zizmor.yml is a hand-rolled direct gate"
-    end
-
-    config
-  end
-
-  def derive_license
-    license_path = repo_path("LICENSE")
-    return "none" unless license_path.file?
-
-    content = read_path(license_path)
-    LICENSE_FILES.each do |name, relative|
-      return name if content == read_path(hub_path(relative))
-    end
-
-    raise FleetError, "LICENSE does not match a canonical fleet license"
-  end
-
-  def derive_dependabot
-    data = YAML.safe_load(read_path(repo_path(".github/dependabot.yml")), permitted_classes: [], aliases: false)
-    data.fetch("updates").map do |entry|
-      normalized = {
-        "package-ecosystem" => entry.fetch("package-ecosystem"),
-        "group" => entry.fetch("groups").keys.first
-      }
-      normalized["directory"] = entry["directory"] if entry["directory"]
-      normalized["directories"] = entry["directories"] if entry["directories"]
-      normalized["allow"] = entry["allow"] if entry["allow"]
-      normalized
-    end
-  end
-
-  def derive_link_check
-    path = ".github/workflows/link-check.yml"
-    data = workflow_data(path)
-    if (caller = reusable_caller(data, "link-check"))
-      with = caller.fetch("with", {})
-      return {
-        "targets" => with.fetch("args", "README.md"),
-        "build-site" => with.fetch("build-site", false),
-        "site-directory" => with.fetch("site-directory", "").to_s,
-        "authenticated-github" => with.fetch("authenticated-github", false),
-        "schedule" => workflow_schedule(data) || "0 14 * * 1",
-        "pull-request-paths" => workflow_paths(data, "pull_request"),
-        "concurrency-group" => workflow_concurrency_group(data) || "link-check"
-      }.reject { |_key, value| blank?(value) }
-    end
-
-    text = read_path(repo_path(path))
-    {
-      "targets" => unquote_scalar(text[/^\s+args:\s*(.+)$/, 1]&.strip) || "README.md",
-      "build-site" => text.include?("npm run build"),
-      "site-directory" => text[/working-directory:\s*([^\s]+)/, 1].to_s,
-      "authenticated-github" => text.include?("GITHUB_TOKEN: ${{ github.token }}"),
-      "schedule" => text[/cron:\s*"([^"]+)"/, 1] || "0 14 * * 1",
-      "pull-request-paths" => extract_list_after(text, "pull_request", "paths"),
-      "concurrency-group" => text[/^\s+group:\s*(.+)$/, 1]&.strip || "link-check"
-    }.reject { |_key, value| blank?(value) }
-  end
-
-  def derive_codeql
-    path = ".github/workflows/codeql.yml"
-    data = workflow_data(path)
-    if (caller = reusable_caller(data, "codeql"))
-      with = caller.fetch("with", {})
-      languages = parse_json_array(with.fetch("languages"))
-      return {
-        "languages" => languages,
-        "paths" => workflow_paths(data, "push"),
-        "runner" => with["runner"] || default_codeql_runner(languages),
-        "timeout-minutes" => with.fetch("timeout-minutes", 30),
-        "build-mode" => with.fetch("build-mode", "").to_s,
-        "build-profile" => with.fetch("build-profile", "").to_s,
-        "schedule" => workflow_schedule(data)
-      }.reject { |_key, value| blank?(value) }
-    end
-
-    text = read_path(repo_path(path))
-    languages =
-      if (matrix = text[/language:\s*\[([^\]]+)\]/, 1])
-        matrix.split(",").map(&:strip)
-      else
-        [text[/^\s+languages:\s*([a-z-]+)$/, 1]].compact
-      end
-
-    {
-      "languages" => languages,
-      "paths" => extract_list_after(text, "push", "paths"),
-      "runner" => text[/^\s+runs-on:\s*([^\s]+)$/, 1] || default_codeql_runner(languages),
-      "timeout-minutes" => (text[/^\s+timeout-minutes:\s*(\d+)$/, 1] || "30").to_i,
-      "build-mode" => unquote_scalar(text[/^\s+build-mode:\s*([^\s]+)$/, 1]).to_s,
-      "build-profile" => extract_build_profile(text),
-      "schedule" => text[/cron:\s*"([^"]+)"/, 1]
-    }.reject { |_key, value| blank?(value) }
-  end
-
-  def derive_pinprick_audit
-    path = ".github/workflows/pinprick-audit.yml"
-    data = workflow_data(path)
-    if (caller = reusable_caller(data, "pinprick-audit"))
-      with = caller.fetch("with", {})
-      return {
-        "advanced-security" => derived_advanced_security(with.fetch("advanced-security", SAME_ORG_ADVANCED_SECURITY)),
-        "fail-on-findings" => with.fetch("fail-on-findings", true),
-        "timeout-minutes" => derived_timeout_from_value(with.fetch("timeout-minutes", 15)),
-        "push-paths" => workflow_paths(data, "push")
-      }.reject { |_key, value| blank?(value) }
-    end
-
-    text = read_path(repo_path(path))
-    {
-      "advanced-security" => text[/^\s+advanced-security:\s*(.+)$/, 1]&.strip || SAME_ORG_ADVANCED_SECURITY,
-      "fail-on-findings" => (text[/^\s+fail-on-findings:\s*(.+)$/, 1]&.strip || "true") == "true",
-      "timeout-minutes" => derived_timeout(text),
-      "push-paths" => extract_push_paths_after_push(text)
-    }.reject { |_key, value| blank?(value) }
-  end
-
-  def derive_zizmor
-    path = ".github/workflows/zizmor.yml"
-    data = workflow_data(path)
-    if (caller = reusable_caller(data, "zizmor"))
-      with = caller.fetch("with", {})
-      return {
-        "push-paths" => workflow_paths(data, "push").reject { |path| path == ".github/workflows/**" },
-        "schedule" => workflow_schedule(data),
-        "timeout-minutes" => derived_timeout_from_value(with.fetch("timeout-minutes", 15))
-      }.reject { |_key, value| blank?(value) }
-    end
-
-    text = read_path(repo_path(path))
-    {
-      "push-paths" => extract_list_after(text, "push", "paths").reject { |path| path == ".github/workflows/**" },
-      "schedule" => text[/cron:\s*"([^"]+)"/, 1],
-      "timeout-minutes" => derived_timeout(text)
-    }.reject { |_key, value| blank?(value) }
-  end
-
-  def derived_timeout(text)
-    timeout = (text[/^\s+timeout-minutes:\s*(\d+)$/, 1] || "15").to_i
-    timeout == 15 ? nil : timeout
-  end
-
-  def derived_timeout_from_value(value)
-    timeout = value.to_i
-    timeout == 15 ? nil : timeout
-  end
-
-  def derived_advanced_security(value)
-    return value.to_s if [true, false].include?(value)
-
-    value
-  end
-
-  def derive_readme
-    path = repo_path("README.md")
-    return {} unless path.file?
-
-    text = read_path(path)
-    result = {}
-
-    badges_text = marked_block_body(text, "badges") || text
-    badge_lines = badges_text.lines.select { |line| line.start_with?("[![") }.map(&:chomp)
-    ci_badge = badge_lines.find { |line| line.include?("/actions/workflows/") }
-    if ci_badge
-      workflow = ci_badge[%r{/actions/workflows/([^/]+)/badge\.svg}, 1]
-      extra = badge_lines.reject do |line|
-        line == ci_badge || line.include?("License-AGPL--3.0--only") || line.include?("License-MIT")
-      end
-      result["badges"] = { "workflow" => workflow, "extra" => extra }
-    end
-
-    license_text = marked_block_body(text, "license-section") || text
-    if (section = license_text[/^## License\n\n.*?(?=^## |\z)/m])
-      body = section.sub(/^## License\n\n/, "").strip
-      default = default_readme_license(config_license: derive_license)
-      result["license"] = body == default ? {} : { "text" => body }
-    end
-
-    result
-  end
-
   def changed_managed_surfaces(config)
     changed_paths = guard_changed_paths
     return [] if changed_paths.empty?
@@ -1037,127 +806,6 @@ class FleetSync
       "Land opt-outs through the fleet sync bot after the hub canon changes."
   end
 
-  def workflow_data(relative_path)
-    YAML.safe_load(read_path(repo_path(relative_path)), permitted_classes: [], aliases: false)
-  end
-
-  def workflow_on(data)
-    data["on"] || data[true] || {}
-  end
-
-  def workflow_paths(data, event)
-    event_data = workflow_on(data)[event]
-    return [] unless event_data.is_a?(Hash)
-
-    Array(event_data["paths"])
-  end
-
-  def workflow_schedule(data)
-    schedules = workflow_on(data)["schedule"]
-    first = Array(schedules).first
-    first["cron"] if first.is_a?(Hash)
-  end
-
-  def workflow_concurrency_group(data)
-    concurrency = data["concurrency"]
-    return concurrency if concurrency.is_a?(String)
-
-    concurrency["group"] if concurrency.is_a?(Hash)
-  end
-
-  def reusable_caller(data, workflow_name)
-    jobs = data["jobs"]
-    return nil unless jobs.is_a?(Hash)
-
-    jobs.values.find do |job|
-      job.is_a?(Hash) &&
-        job["uses"].to_s.include?("starhaven-io/.github/.github/workflows/reusable-#{workflow_name}.yml@")
-    end
-  end
-
-  def parse_json_array(value)
-    parsed = value.is_a?(Array) ? value : JSON.parse(value.to_s)
-    raise FleetError, "workflow caller languages must be a JSON array" unless parsed.is_a?(Array)
-
-    parsed
-  end
-
-  def marked_block_body(text, block_name)
-    match = text.match(/^<!-- fleet:block #{Regexp.escape(block_name)} -->\n(?<body>.*?)^<!-- fleet:end -->/m)
-    return nil unless match
-
-    match[:body].strip
-  end
-
-  def unquote_scalar(value)
-    return nil if value.nil?
-
-    value.delete_prefix("\"").delete_suffix("\"")
-  end
-
-  def extract_build_profile(text)
-    return "swift-package" if text.match?(/^\s+run:\s*swift build$/)
-    return "brewy-xcode" if text.include?("xcodebuild \\") && text.include?("-project Brewy.xcodeproj")
-
-    ""
-  end
-
-  def extract_list_after(text, parent_key, child_key)
-    lines = text.lines
-    parent_index = lines.index do |line|
-      line.match?(/^\s{2}#{Regexp.escape(parent_key)}:/) || line.match?(/^#{Regexp.escape(parent_key)}:/)
-    end
-    return [] unless parent_index
-
-    child_index = nil
-    ((parent_index + 1)...lines.length).each do |index|
-      line = lines[index]
-      break if line.match?(/^\s{2}[a-zA-Z_-]+:/) && !line.include?("#{child_key}:")
-
-      if line.match?(/^\s{4}#{Regexp.escape(child_key)}:/)
-        child_index = index
-        break
-      end
-    end
-    return [] unless child_index
-
-    values = []
-    ((child_index + 1)...lines.length).each do |index|
-      line = lines[index]
-      break unless line.match?(/^\s{6}-\s+/)
-
-      values << line.sub(/^\s{6}-\s*/, "").strip.delete_prefix("\"").delete_suffix("\"")
-    end
-    values
-  end
-
-  def extract_push_paths_after_push(text)
-    lines = text.lines
-    push_index = lines.index { |line| line.match?(/^\s{2}push:/) }
-    return [] unless push_index
-
-    paths_index = nil
-    ((push_index + 1)...lines.length).each do |index|
-      line = lines[index]
-      break if line.match?(/^\s{2}[a-zA-Z_-]+:/)
-
-      if line.match?(/^\s{4}paths:/)
-        paths_index = index
-        break
-      end
-    end
-    return [] unless paths_index
-
-    values = []
-    ((paths_index + 1)...lines.length).each do |index|
-      line = lines[index]
-      break unless line.match?(/^\s{6}-\s+/)
-
-      values << line.sub(/^\s{6}-\s*/, "").strip.delete_prefix("\"").delete_suffix("\"")
-    end
-    values
-  end
-
   def dependabot_entries(raw)
     entries =
       if raw.is_a?(Array)
@@ -1196,8 +844,6 @@ class FleetSync
     next_content =
       if current.match?(marker)
         current.sub(marker, replacement)
-      elsif @bootstrap
-        bootstrap_replace_block(relative_path, block_name, current, replacement)
       else
         raise FleetError, "#{relative_path} is missing fleet:block #{block_name}"
       end
@@ -1217,81 +863,11 @@ class FleetSync
     next_content =
       if current.match?(marker)
         current.sub(marker, replacement)
-      elsif @bootstrap
-        bootstrap_replace_recipe(current, block_name, replacement)
       else
         raise FleetError, "justfile is missing fleet:block #{block_name}"
       end
 
     write_file("justfile", next_content, "justfile:#{block_name}")
-  end
-
-  def bootstrap_replace_block(relative_path, block_name, current, replacement)
-    case [relative_path, block_name]
-    when ["AGENTS.md", "commit-and-pr-conventions"]
-      replace_section(current, "## Commit and PR conventions", replacement)
-    when [".gitignore", "local-state"]
-      replace_gitignore_local_state(current, replacement)
-    when ["README.md", "badges"]
-      replace_readme_badges(current, replacement)
-    when ["README.md", "license-section"]
-      replace_section(current, "## License", replacement)
-    else
-      raise FleetError, "#{relative_path} cannot bootstrap fleet:block #{block_name}"
-    end
-  end
-
-  def replace_section(current, heading, replacement)
-    pattern = /^#{Regexp.escape(heading)}\n.*?(?:(\n+)(?=^## )|\z)/m
-    raise FleetError, "section #{heading} is missing" unless current.match?(pattern)
-
-    current.sub(pattern) do |_match|
-      suffix = Regexp.last_match(1) ? "\n\n" : "\n"
-      "#{replacement}#{suffix}"
-    end
-  end
-
-  def replace_gitignore_local_state(current, replacement)
-    if current.start_with?("# Local machine/editor/agent state\n")
-      current.sub(%r{\A# Local machine/editor/agent state\n.*?(?=\n# |\z)}m, replacement)
-    else
-      "#{replacement}\n\n#{current}"
-    end
-  end
-
-  def replace_readme_badges(current, replacement)
-    lines = current.lines
-    heading_index = lines.index { |line| line.start_with?("# ") }
-    raise FleetError, "README.md is missing an H1" unless heading_index
-
-    start_index = heading_index + 1
-    start_index += 1 while lines[start_index] == "\n"
-    finish_index = start_index
-    finish_index += 1 while lines[finish_index]&.start_with?("[![")
-    finish_index += 1 while lines[finish_index] == "\n"
-
-    lines[start_index...finish_index] = ["#{replacement}\n\n"]
-    lines.join
-  end
-
-  def bootstrap_replace_recipe(current, block_name, replacement)
-    lines = current.lines
-    recipe_index = lines.index { |line| line.match?(/^#{Regexp.escape(block_name)}:/) }
-
-    return "#{current.chomp}\n\n#{replacement}\n" unless recipe_index
-
-    start_index = recipe_index
-    while start_index.positive? &&
-          lines[start_index - 1].start_with?("#") &&
-          !lines[start_index - 1].start_with?("# fleet:")
-      start_index -= 1
-    end
-
-    finish_index = recipe_index + 1
-    finish_index += 1 while finish_index < lines.length && lines[finish_index].match?(/^(\s|$)/)
-    separator = finish_index < lines.length ? "\n\n" : "\n"
-    lines[start_index...finish_index] = ["#{replacement}#{separator}"]
-    lines.join
   end
 
   def fenced_block(block_name, style, body)
@@ -1386,18 +962,6 @@ class FleetSync
     Array(languages).include?("swift") ? "macos-26" : "ubuntu-slim"
   end
 
-  def default_readme_license(config_license:)
-    case config_license
-    when "agpl"
-      "This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) " \
-      "(`AGPL-3.0-only`).\n\nCopyright (C) 2026 Patrick Linnane"
-    when "mit"
-      "This project is licensed under the [MIT License](LICENSE)."
-    else
-      ""
-    end
-  end
-
   def repo_name_for_urls
     @repo_name || @repo_root.basename.to_s
   end
@@ -1406,88 +970,6 @@ class FleetSync
     return if @changes.empty?
 
     @changes.each { |surface| warn "fleet: changed #{surface}" }
-  end
-
-  def dump_config(config)
-    emit_mapping(config, 0)
-  end
-
-  def emit_mapping(hash, indent)
-    hash.map do |key, value|
-      rendered = emit_value(value, indent + 2)
-      if (value.is_a?(Hash) && !value.empty?) || block_array?(value)
-        "#{" " * indent}#{key}:\n#{rendered}"
-      else
-        "#{" " * indent}#{key}: #{rendered}"
-      end
-    end.join("\n").concat("\n")
-  end
-
-  def emit_value(value, indent)
-    case value
-    when Hash
-      return "{}" if value.empty?
-
-      emit_mapping(value, indent).chomp
-    when Array
-      return "[]" if value.empty?
-      return "[#{value.map { |item| emit_inline(item) }.join(", ")}]" if inline_array?(value)
-
-      value.map { |item| emit_array_item(item, indent) }.join("\n")
-    when String
-      if value.include?("\n")
-        lines = value.lines.map { |line| line == "\n" ? line : "#{" " * indent}#{line}" }.join
-        "|-\n#{lines}"
-      else
-        emit_inline(value)
-      end
-    when TrueClass, FalseClass, Integer
-      value.to_s
-    when NilClass
-      "null"
-    else
-      raise FleetError, "cannot dump #{value.class}"
-    end
-  end
-
-  def block_array?(value)
-    value.is_a?(Array) && !inline_array?(value)
-  end
-
-  def inline_array?(value)
-    value.is_a?(Array) &&
-      value.all? { |item| item.is_a?(String) || item.is_a?(Integer) || item == true || item == false } &&
-      value.join(", ").length <= 72
-  end
-
-  def blank?(value)
-    value.nil? || (value.respond_to?(:empty?) && value.empty?)
-  end
-
-  def emit_array_item(item, indent)
-    case item
-    when Hash
-      lines = emit_mapping(item, indent + 2).lines
-      first = lines.shift.sub(/^#{" " * (indent + 2)}/, "")
-      "#{" " * indent}- #{first}#{lines.join}".chomp
-    when Array
-      "#{" " * indent}- #{emit_value(item, indent + 2).strip}"
-    else
-      "#{" " * indent}- #{emit_inline(item)}"
-    end
-  end
-
-  def emit_inline(value)
-    case value
-    when String
-      "\"#{value.gsub(/["\\]/) { |char| "\\#{char}" }}\""
-    when TrueClass, FalseClass, Integer
-      value.to_s
-    when Hash
-      "{ #{value.map { |key, nested| "#{key}: #{emit_inline(nested)}" }.join(", ")} }"
-    else
-      raise FleetError, "cannot inline #{value.class}"
-    end
   end
 
   def repo_path(relative)
@@ -1524,7 +1006,6 @@ options = {
   repo_root: Dir.pwd,
   repo_name: nil,
   check: false,
-  bootstrap: false,
   guard_base: nil,
   hub: false
 }
@@ -1535,7 +1016,6 @@ OptionParser.new do |parser|
   parser.on("--repo-root PATH", "Consumer repository root") { |value| options[:repo_root] = value }
   parser.on("--repo-name NAME", "Consumer repository name") { |value| options[:repo_name] = value }
   parser.on("--check", "Report drift without writing") { options[:check] = true }
-  parser.on("--bootstrap", "Derive and write an initial .fleet.yml if missing") { options[:bootstrap] = true }
   parser.on("--hub", "Treat this repository as the canonical fleet hub") { options[:hub] = true }
   parser.on("--guard BASE_REF", "Reject unmanaged edits to fleet-managed surfaces") do |value|
     options[:guard_base] = value
