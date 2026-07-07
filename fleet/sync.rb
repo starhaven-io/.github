@@ -92,6 +92,14 @@ class FleetSync
   CODEQL_BUILD_MODES = ["", "none", "autobuild", "manual"].freeze
   CODEQL_BUILD_PROFILES = ["", "swift-package", "brewy-xcode"].freeze
   FLEET_MARKER_PATTERN = /<!--\s*fleet:(?:block|end)\b/
+  REUSABLE_WORKFLOW_USES_PATTERN = %r{
+    ^(?<prefix>\s*uses:\s*)
+    (?<quote>["']?)
+    (?<workflow>starhaven-io/\.github/\.github/workflows/reusable-[A-Za-z0-9_.-]+\.ya?ml)
+    @(?<ref>[^"'\s#]+)
+    \k<quote>
+    (?<comment>\s*(?:\#.*)?)$
+  }x
 
   attr_reader :changes
 
@@ -123,6 +131,7 @@ class FleetSync
     render_tier1(config)
     render_tier2(config)
     render_tier3(config)
+    render_reusable_workflow_pins
   end
 
   def run_guard(config)
@@ -605,6 +614,48 @@ class FleetSync
     )
   end
 
+  def render_reusable_workflow_pins
+    ref, version = reusable_pin
+    workflow_files.each do |relative_path|
+      path = repo_path(relative_path)
+      current = read_path(path)
+      next_content = sync_reusable_pins(current, ref, version)
+      next if next_content == current
+
+      write_file(relative_path, next_content, reusable_pin_surface(relative_path))
+    end
+  end
+
+  def sync_reusable_pins(text, ref, version)
+    text.each_line.map do |line|
+      newline = line.end_with?("\n") ? "\n" : ""
+      body = line.delete_suffix("\n")
+      match = body.match(REUSABLE_WORKFLOW_USES_PATTERN)
+      next line unless match
+
+      "#{match[:prefix]}#{match[:quote]}#{match[:workflow]}@#{ref}#{match[:quote]} # #{version}#{newline}"
+    end.join
+  end
+
+  def workflow_files
+    [".github/workflows/*.yml", ".github/workflows/*.yaml"].flat_map do |pattern|
+      Dir.glob(repo_path(pattern).to_s).filter_map do |path|
+        candidate = Pathname(path)
+        next unless regular_file?(candidate)
+
+        candidate.relative_path_from(@repo_root).to_s
+      end
+    end.sort
+  end
+
+  def workflow_file?(path)
+    path.match?(%r{\A\.github/workflows/[^/]+\.ya?ml\z})
+  end
+
+  def reusable_pin_surface(path)
+    "#{path}:reusable-pins"
+  end
+
   def changed_managed_surfaces(config)
     changed_paths = guard_changed_paths
     return [] if changed_paths.empty?
@@ -625,6 +676,12 @@ class FleetSync
       base_block = guard_base_block(block)
       current_block = current_marked_block(block)
       managed << block_surface(block) if base_block != current_block
+    end
+
+    changed_paths.each do |path|
+      next unless workflow_file?(path)
+
+      managed << reusable_pin_surface(path) if guard_base_reusable_pins(path) != current_reusable_pins(path)
     end
 
     managed.uniq.sort
@@ -765,6 +822,10 @@ class FleetSync
     stdout
   end
 
+  def guard_base_reusable_pins(path)
+    reusable_pins_from_text(guard_base_file(path))
+  end
+
   def guard_base_config
     return @guard_base_config if defined?(@guard_base_config)
 
@@ -785,6 +846,24 @@ class FleetSync
     return nil unless regular_file?(path)
 
     marked_block_from_text(read_path(path), block.fetch(:name), block.fetch(:style))
+  end
+
+  def current_reusable_pins(path)
+    full_path = repo_path(path)
+    return [] unless regular_file?(full_path)
+
+    reusable_pins_from_text(read_path(full_path))
+  end
+
+  def reusable_pins_from_text(text)
+    return [] if text.nil?
+
+    text.each_line.filter_map do |line|
+      match = line.delete_suffix("\n").match(REUSABLE_WORKFLOW_USES_PATTERN)
+      next unless match
+
+      [match[:workflow], match[:ref], match[:comment].strip]
+    end
   end
 
   def marked_block_from_text(text, block_name, style)

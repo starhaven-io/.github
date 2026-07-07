@@ -41,6 +41,40 @@ module GuardHelpers
     sync(repo, "--guard", "HEAD~1", "--hub")
   end
 
+  def fleet_version(repo)
+    File.read(File.join(repo, "fleet/VERSION")).strip
+  end
+
+  def fleet_ref(repo)
+    git(repo, "rev-list", "-n1", "refs/tags/#{fleet_version(repo)}").stdout.strip
+  end
+
+  def reusable_workflow_line(repo, ref: nil, version: nil)
+    ref ||= fleet_ref(repo)
+    version ||= fleet_version(repo)
+    "    uses: starhaven-io/.github/.github/workflows/reusable-conventional-commits.yml@#{ref} # #{version}"
+  end
+
+  def write_ci_workflow(repo, uses_line)
+    File.write(File.join(repo, ".github/workflows/ci.yml"), <<~YAML)
+      name: CI
+
+      on:
+        pull_request:
+
+      permissions: {}
+
+      jobs:
+        commits:
+          name: Conventional Commits
+          if: github.event_name == 'pull_request'
+          permissions:
+            contents: read
+            pull-requests: read
+      #{uses_line}
+    YAML
+  end
+
   def commit_all(repo, message)
     git(repo, "add", "-A")
     git(repo, "-c", "user.name=Fleet Guard Regression", "-c", "user.email=fleet@example.invalid",
@@ -128,10 +162,79 @@ class GuardRegressionsTest < Minitest::Test
     assert_sync_success(sync(repo, "--check"))
   end
 
+  def test_sync_updates_reusable_pins_in_repo_owned_workflows
+    repo = scenario("repo-owned-reusable-pin-sync")
+    write_ci_workflow(repo, reusable_workflow_line(repo, ref: "0" * 40, version: "v2026.07.05.9"))
+
+    assert_sync_success(sync(repo))
+
+    ci = File.read(File.join(repo, ".github/workflows/ci.yml"))
+    assert_includes ci, reusable_workflow_line(repo)
+    refute_includes ci, "v2026.07.05.9"
+  end
+
+  def test_syncs_multiple_quoted_and_yaml_reusable_pins
+    repo = scenario("multi-reusable-pin-sync")
+    ref = fleet_ref(repo)
+    version = fleet_version(repo)
+    stale = "0" * 40
+    path = File.join(repo, ".github/workflows/extra.yaml")
+    File.write(path, <<~YAML)
+      name: Extra
+
+      on:
+        pull_request:
+
+      permissions: {}
+
+      jobs:
+        commits:
+          uses: starhaven-io/.github/.github/workflows/reusable-conventional-commits.yml@#{stale} # v2026.07.05.9
+        audit:
+          uses: "starhaven-io/.github/.github/workflows/reusable-pinprick-audit.yml@#{stale}" # v2026.07.05.9
+    YAML
+
+    assert_sync_success(sync(repo))
+
+    synced = File.read(path)
+    quoted = "\"starhaven-io/.github/.github/workflows/reusable-pinprick-audit.yml@#{ref}\" # #{version}"
+    assert_includes synced, "reusable-conventional-commits.yml@#{ref} # #{version}"
+    assert_includes synced, quoted
+    refute_includes synced, "v2026.07.05.9"
+  end
+
+  def test_check_reports_stale_reusable_pins_in_repo_owned_workflows
+    repo = scenario("repo-owned-reusable-pin-check")
+    write_ci_workflow(repo, reusable_workflow_line(repo, ref: "0" * 40, version: "v2026.07.05.9"))
+
+    result = sync(repo, "--check")
+
+    assert_rejects(["--check", result, ".github/workflows/ci.yml:reusable-pins"])
+    assert_includes result.output, "fleet sync drift detected"
+  end
+
   def test_allows_legitimate_unmanaged_edits
     repo = scenario("unmanaged-edit")
     File.open(File.join(repo, "SECURITY.md"), "a") { |file| file.puts("\nRegression harness unmanaged edit.") }
     commit_all(repo, "unmanaged edit")
+
+    assert_sync_success(guard(repo))
+  end
+
+  def test_rejects_stale_reusable_pin_edits
+    repo = scenario("stale-reusable-pin-edit")
+    write_ci_workflow(repo, reusable_workflow_line(repo))
+    commit_all(repo, "add ci workflow")
+    write_ci_workflow(repo, reusable_workflow_line(repo, ref: "0" * 40, version: "v2026.07.05.9"))
+    commit_all(repo, "stale reusable pin")
+
+    assert_rejects(["guard", guard(repo), ".github/workflows/ci.yml:reusable-pins"])
+  end
+
+  def test_allows_adding_canonical_reusable_pin
+    repo = scenario("add-canonical-reusable-pin")
+    write_ci_workflow(repo, reusable_workflow_line(repo))
+    commit_all(repo, "add ci workflow with canonical pin")
 
     assert_sync_success(guard(repo))
   end
