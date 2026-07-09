@@ -42,6 +42,18 @@ module GuardHelpers
     sync(repo, "--guard", "HEAD~1", "--hub")
   end
 
+  def consumer_guard(repo)
+    sync(repo, "--guard", "HEAD~1")
+  end
+
+  def fleet_config(repo)
+    YAML.safe_load_file(File.join(repo, ".fleet.yml"), permitted_classes: [], aliases: false)
+  end
+
+  def write_fleet_config(repo, config)
+    File.write(File.join(repo, ".fleet.yml"), config.to_yaml)
+  end
+
   def fleet_version(repo)
     File.read(File.join(repo, "fleet/VERSION")).strip
   end
@@ -238,6 +250,33 @@ class GuardRegressionsTest < Minitest::Test
     commit_all(repo, "add ci workflow with canonical pin")
 
     assert_sync_success(guard(repo))
+  end
+
+  def test_rejects_malformed_base_config_before_declassification_check
+    repo = scenario("malformed-base-config-declassification")
+    config = fleet_config(repo)
+    File.write(File.join(repo, ".fleet.yml"), "schema: [\n")
+    commit_all(repo, "malformed base fleet config")
+
+    head_config = config.merge("exceptions" => config.fetch("exceptions", {}).merge(
+      "pinprick-audit" => "consumer opt-out"
+    ))
+    write_fleet_config(repo, head_config)
+    commit_all(repo, "declassify pinprick audit")
+
+    assert_rejects(["guard", consumer_guard(repo), "fleet guard: base .fleet.yml could not be parsed"])
+  end
+
+  def test_allows_absent_base_config_for_fleet_adoption
+    repo = scenario("absent-base-config-adoption")
+    config = fleet_config(repo)
+    FileUtils.rm_f(File.join(repo, ".fleet.yml"))
+    commit_all(repo, "remove fleet config at base")
+
+    write_fleet_config(repo, config)
+    commit_all(repo, "adopt fleet config")
+
+    assert_sync_success(consumer_guard(repo))
   end
 
   def test_rejects_folded_reusable_pin
