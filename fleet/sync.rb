@@ -930,13 +930,13 @@ class FleetSync
     text = guard_base_file(".fleet.yml")
     return @guard_base_config = nil if text.nil?
 
-    @guard_base_config = YAML.safe_load(text, permitted_classes: [], aliases: false)
-    return @guard_base_config = nil unless @guard_base_config.is_a?(Hash)
-    return @guard_base_config = nil unless @guard_base_config["schema"] == 1
+    config = YAML.safe_load(text, permitted_classes: [], aliases: false)
+    raise FleetError, "fleet guard: base .fleet.yml must be a mapping" unless config.is_a?(Hash)
+    raise FleetError, "fleet guard: base .fleet.yml schema must be 1" unless config["schema"] == 1
 
-    @guard_base_config
-  rescue Psych::Exception
-    @guard_base_config = nil
+    @guard_base_config = config
+  rescue Psych::Exception => e
+    raise FleetError, "fleet guard: base .fleet.yml could not be parsed: #{e.message}"
   end
 
   def current_marked_block(block)
