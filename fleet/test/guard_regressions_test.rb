@@ -279,6 +279,39 @@ class GuardRegressionsTest < Minitest::Test
     assert_sync_success(consumer_guard(repo))
   end
 
+  def test_rejects_consumer_fleet_config_weakening_with_matching_render
+    repo = scenario("consumer-config-weakening")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("pinprick-audit")["fail-on-findings"] = false
+    write_fleet_config(repo, config)
+    assert_sync_success(sync(repo))
+    assert_sync_success(sync(repo, "--check"))
+    commit_all(repo, "weaken fleet config")
+
+    assert_rejects(["guard", consumer_guard(repo), ".fleet.yml is hub-owned fleet configuration"])
+  end
+
+  def test_rejects_consumer_fleet_config_edit
+    repo = scenario("consumer-config-edit")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("pinprick-audit")["fail-on-findings"] = false
+    write_fleet_config(repo, config)
+    commit_all(repo, "edit fleet config")
+
+    assert_rejects(["guard", consumer_guard(repo), ".fleet.yml is hub-owned fleet configuration"])
+  end
+
+  def test_allows_hub_fleet_config_edit
+    repo = scenario("hub-config-edit")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("pinprick-audit")["fail-on-findings"] = false
+    write_fleet_config(repo, config)
+    assert_sync_success(sync(repo))
+    commit_all(repo, "edit hub fleet config")
+
+    assert_sync_success(guard(repo))
+  end
+
   def test_rejects_folded_reusable_pin
     repo = scenario("folded-reusable-pin")
     stale = "0" * 40
