@@ -249,7 +249,77 @@ class GuardRegressionsTest < Minitest::Test
     write_ci_workflow(repo, reusable_workflow_line(repo))
     commit_all(repo, "add ci workflow with canonical pin")
 
+    assert_sync_success(consumer_guard(repo))
+  end
+
+  def test_rejects_removing_reusable_workflow_calls
+    repo = scenario("remove-reusable-workflow-call")
+    write_ci_workflow(repo, reusable_workflow_line(repo))
+    commit_all(repo, "add reusable workflow call")
+
+    FileUtils.rm_f(File.join(repo, ".github/workflows/ci.yml"))
+    commit_all(repo, "remove reusable workflow call")
+
+    result = consumer_guard(repo)
+    assert_rejects(["guard", result, "reusable workflow declassification rejected"])
+    assert_includes result.output, "reusable-conventional-commits.yml (1 -> 0)"
+  end
+
+  def test_rejects_reducing_reusable_workflow_call_multiplicity
+    repo = scenario("reduce-reusable-workflow-call-multiplicity")
+    path = File.join(repo, ".github/workflows/ci.yml")
+    uses_line = reusable_workflow_line(repo)
+    write_ci_workflow(repo, uses_line)
+    second_job = "\n  second-commits-check:\n#{uses_line}\n"
+    File.open(path, "a") { |file| file.write(second_job) }
+    commit_all(repo, "add two reusable workflow calls")
+
+    text = File.read(path)
+    File.write(path, text.delete_suffix(second_job))
+    commit_all(repo, "remove one reusable workflow call")
+
+    result = consumer_guard(repo)
+    assert_rejects(["guard", result, "reusable workflow declassification rejected"])
+    assert_includes result.output, "reusable-conventional-commits.yml (2 -> 1)"
+  end
+
+  def test_rejects_moving_reusable_workflow_calls
+    repo = scenario("move-reusable-workflow-call")
+    write_ci_workflow(repo, reusable_workflow_line(repo))
+    commit_all(repo, "add reusable workflow call")
+
+    source = File.join(repo, ".github/workflows/ci.yml")
+    destination = File.join(repo, ".github/workflows/policy.yml")
+    FileUtils.mv(source, destination)
+    commit_all(repo, "move reusable workflow call")
+
+    result = consumer_guard(repo)
+    assert_rejects(["guard", result, "reusable workflow declassification rejected"])
+    assert_includes result.output, ".github/workflows/ci.yml: reusable-conventional-commits.yml (1 -> 0)"
+  end
+
+  def test_allows_hub_to_remove_reusable_workflow_calls
+    repo = scenario("hub-remove-reusable-workflow-call")
+    write_ci_workflow(repo, reusable_workflow_line(repo))
+    commit_all(repo, "add reusable workflow call")
+
+    FileUtils.rm_f(File.join(repo, ".github/workflows/ci.yml"))
+    commit_all(repo, "remove reusable workflow call")
+
     assert_sync_success(guard(repo))
+  end
+
+  def test_allows_repo_owned_conditions_to_change
+    repo = scenario("repo-owned-reusable-workflow-condition")
+    path = File.join(repo, ".github/workflows/ci.yml")
+    write_ci_workflow(repo, reusable_workflow_line(repo))
+    commit_all(repo, "add reusable workflow call")
+
+    text = File.read(path)
+    File.write(path, text.sub("if: github.event_name == 'pull_request'", "if: false"))
+    commit_all(repo, "change repo-owned condition")
+
+    assert_sync_success(consumer_guard(repo))
   end
 
   def test_rejects_malformed_base_config_before_declassification_check
