@@ -100,6 +100,12 @@ class FleetSync
     \k<quote>
     (?<comment>\s*(?:\#.*)?)$
   }x
+  REUSABLE_WORKFLOW_VALUE_PATTERN = %r{
+    \A
+    (?<workflow>starhaven-io/\.github/\.github/workflows/reusable-[A-Za-z0-9_.-]+\.ya?ml)
+    @(?<ref>\S+)
+    \z
+  }x
 
   attr_reader :changes
 
@@ -139,6 +145,8 @@ class FleetSync
     base_managed = guard_base_config ? managed_surfaces(guard_base_config) : []
     declassified_surfaces = base_managed - head_managed
     raise FleetError, guard_declassification_message(declassified_surfaces) if declassified_surfaces.any? && !hub_repo?
+
+    reject_hidden_reusable_pins
 
     managed_changes = changed_managed_surfaces(config)
     return if managed_changes.empty?
@@ -687,6 +695,57 @@ class FleetSync
     managed.uniq.sort
   end
 
+  def reject_hidden_reusable_pins
+    guard_changed_paths.each do |path|
+      next unless workflow_file?(path)
+
+      full_path = repo_path(path)
+      next unless regular_file?(full_path)
+
+      hidden_pins = hidden_reusable_pins(read_path(full_path))
+      next if hidden_pins.empty?
+
+      raise FleetError, hidden_reusable_pin_message(path, hidden_pins)
+    end
+  end
+
+  def hidden_reusable_pins(text)
+    line_pins = Hash.new(0)
+    reusable_pins_from_text(text).each do |workflow, ref, _comment|
+      line_pins[[workflow, ref]] += 1
+    end
+
+    yaml_reusable_pins(text).filter_map do |workflow, ref|
+      key = [workflow, ref]
+      if line_pins[key].positive?
+        line_pins[key] -= 1
+        next
+      end
+
+      key
+    end
+  end
+
+  def yaml_reusable_pins(text)
+    collect_yaml_reusable_pins(YAML.safe_load(text, permitted_classes: [], aliases: false))
+  rescue Psych::Exception
+    []
+  end
+
+  def collect_yaml_reusable_pins(node)
+    case node
+    when Hash
+      node.flat_map { |key, value| collect_yaml_reusable_pins(key) + collect_yaml_reusable_pins(value) }
+    when Array
+      node.flat_map { |entry| collect_yaml_reusable_pins(entry) }
+    when String
+      match = node.match(REUSABLE_WORKFLOW_VALUE_PATTERN)
+      match ? [[match[:workflow], match[:ref]]] : []
+    else
+      []
+    end
+  end
+
   def managed_surfaces(config)
     managed_blocks = guard_managed_blocks(config).map do |block|
       block_surface(block)
@@ -883,6 +942,13 @@ class FleetSync
     "fleet guard: managed surface declassification rejected (#{surfaces.join(", ")}); " \
       "human pull requests cannot shrink the fleet-managed surface set. " \
       "Land opt-outs through the fleet sync bot after the hub canon changes."
+  end
+
+  def hidden_reusable_pin_message(path, pins)
+    workflows = pins.map { |workflow, ref| "#{workflow}@#{ref}" }.uniq.sort.join(", ")
+    "fleet guard: hidden reusable workflow pin rejected in #{path} (#{workflows}); " \
+      "write every starhaven-io/.github reusable uses: as a single-line scalar because " \
+      "folded, block, or escaped forms evade fleet pin management."
   end
 
   def dependabot_entries(raw)
