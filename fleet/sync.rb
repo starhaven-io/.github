@@ -147,6 +147,7 @@ class FleetSync
     raise FleetError, guard_declassification_message(declassified_surfaces) if declassified_surfaces.any? && !hub_repo?
 
     reject_hidden_reusable_pins
+    reject_symlinked_workflow_paths(config)
 
     managed_changes = changed_managed_surfaces(config)
     return if managed_changes.empty?
@@ -709,6 +710,44 @@ class FleetSync
     end
   end
 
+  def reject_symlinked_workflow_paths(config)
+    managed = [guard_base_config, config]
+              .compact
+              .flat_map { |candidate| managed_whole_files(candidate) }
+              .uniq
+    workflow_paths = guard_changed_paths.select { |path| workflow_file?(path) }
+    workflow_paths.concat(workflow_files) if symlinked_workflow_root_changed?
+
+    workflow_paths.uniq.each do |path|
+      full_path = repo_path(path)
+      next unless managed_path_present?(full_path)
+
+      reject_symlinked_workflow_ancestors(path)
+      next if managed.include?(path)
+
+      raise FleetError, non_regular_file_message(path) unless regular_file?(full_path)
+    end
+  end
+
+  def reject_symlinked_workflow_ancestors(path)
+    Pathname(path).descend do |ancestor|
+      next if ancestor.to_s == path
+
+      full_ancestor = repo_path(ancestor)
+      next unless full_ancestor.symlink?
+
+      raise FleetError, symlinked_workflow_ancestor_message(path, ancestor.to_s)
+    end
+  end
+
+  def symlinked_workflow_root_changed?
+    guard_changed_paths.any? do |path|
+      next false unless [".github", ".github/workflows"].include?(path)
+
+      repo_path(path).symlink?
+    end
+  end
+
   def hidden_reusable_pins(text)
     line_pins = Hash.new(0)
     reusable_pins_from_text(text).each do |workflow, ref, _comment|
@@ -949,6 +988,11 @@ class FleetSync
     "fleet guard: hidden reusable workflow pin rejected in #{path} (#{workflows}); " \
       "write every starhaven-io/.github reusable uses: as a single-line scalar because " \
       "folded, block, or escaped forms evade fleet pin management."
+  end
+
+  def symlinked_workflow_ancestor_message(path, ancestor)
+    "fleet guard: #{path} has symlinked workflow ancestor #{ancestor}; " \
+      "workflow files must remain under a real .github/workflows directory."
   end
 
   def dependabot_entries(raw)

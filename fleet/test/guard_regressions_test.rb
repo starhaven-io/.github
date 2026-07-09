@@ -387,6 +387,32 @@ class GuardRegressionsTest < Minitest::Test
     )
   end
 
+  def test_rejects_symlinked_workflow_directory
+    repo = scenario("symlinked-workflow-dir")
+    workflows = File.join(repo, ".github/workflows")
+    real = File.join(repo, ".github/workflows-real")
+    FileUtils.mv(workflows, real)
+    File.symlink("workflows-real", workflows)
+    commit_all(repo, "symlink workflows directory")
+
+    assert_equal File.read(File.join(real, "zizmor.yml")), File.read(File.join(workflows, "zizmor.yml"))
+    assert_rejects(["guard", guard(repo), "has symlinked workflow ancestor .github/workflows"])
+  end
+
+  def test_rejects_outside_glob_symlinked_reusable_workflow
+    repo = scenario("outside-glob-symlinked-workflow")
+    write_ci_workflow(repo, reusable_workflow_line(repo))
+    commit_all(repo, "add ci workflow with canonical pin")
+
+    workflow = File.join(repo, ".github/workflows/ci.yml")
+    outside = File.join(repo, ".github/ci-real.yml")
+    FileUtils.mv(workflow, outside)
+    File.symlink("../ci-real.yml", workflow)
+    commit_all(repo, "symlink ci workflow outside the glob")
+
+    assert_rejects(["guard", guard(repo), "ci.yml is not a regular file"])
+  end
+
   def test_rejects_directory_whole_files
     repo = scenario("directory-whole-file")
     workflow = File.join(repo, ".github/workflows/zizmor.yml")
