@@ -146,6 +146,7 @@ class FleetSync
     declassified_surfaces = base_managed - head_managed
     raise FleetError, guard_declassification_message(declassified_surfaces) if declassified_surfaces.any? && !hub_repo?
 
+    reject_consumer_fleet_config_edit
     reject_hidden_reusable_pins
     reject_symlinked_workflow_paths(config)
 
@@ -696,6 +697,14 @@ class FleetSync
     managed.uniq.sort
   end
 
+  def reject_consumer_fleet_config_edit
+    return if hub_repo?
+    return unless guard_changed_paths.include?(".fleet.yml")
+    return unless guard_base_config
+
+    raise FleetError, guard_fleet_config_ownership_message
+  end
+
   def reject_hidden_reusable_pins
     guard_changed_paths.each do |path|
       next unless workflow_file?(path)
@@ -981,6 +990,11 @@ class FleetSync
     "fleet guard: managed surface declassification rejected (#{surfaces.join(", ")}); " \
       "human pull requests cannot shrink the fleet-managed surface set. " \
       "Land opt-outs through the fleet sync bot after the hub canon changes."
+  end
+
+  def guard_fleet_config_ownership_message
+    "fleet guard: .fleet.yml is hub-owned fleet configuration; " \
+      "a consumer pull request cannot change it, so land configuration changes through the fleet sync bot from the hub."
   end
 
   def hidden_reusable_pin_message(path, pins)
