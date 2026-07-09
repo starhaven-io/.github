@@ -149,6 +149,7 @@ class FleetSync
     reject_consumer_fleet_config_edit
     reject_hidden_reusable_pins
     reject_symlinked_workflow_paths(config)
+    reject_reusable_workflow_declassification
 
     managed_changes = changed_managed_surfaces(config)
     return if managed_changes.empty?
@@ -738,6 +739,20 @@ class FleetSync
     end
   end
 
+  def reject_reusable_workflow_declassification
+    return if hub_repo?
+
+    base_counts = guard_base_reusable_workflow_counts_by_path
+    current_counts = current_reusable_workflow_counts_by_path
+    removed = base_counts.filter_map do |(path, workflow), count|
+      current = current_counts.fetch([path, workflow], 0)
+      [path, workflow, count, current] if current < count
+    end
+    return if removed.empty?
+
+    raise FleetError, reusable_workflow_declassification_message(removed)
+  end
+
   def reject_symlinked_workflow_ancestors(path)
     Pathname(path).descend do |ancestor|
       next if ancestor.to_s == path
@@ -933,6 +948,31 @@ class FleetSync
     reusable_pins_from_text(guard_base_file(path))
   end
 
+  def guard_base_reusable_workflow_counts_by_path
+    guard_base_workflow_files.each_with_object(Hash.new(0)) do |path, counts|
+      reusable_pins_from_text(guard_base_file(path)).each do |workflow, _ref, _comment|
+        counts[[path, workflow]] += 1
+      end
+    end
+  end
+
+  def current_reusable_workflow_counts_by_path
+    workflow_files.each_with_object(Hash.new(0)) do |path, counts|
+      reusable_pins_from_text(read_path(repo_path(path))).each do |workflow, _ref, _comment|
+        counts[[path, workflow]] += 1
+      end
+    end
+  end
+
+  def guard_base_workflow_files
+    stdout, stderr, status = Open3.capture3(
+      "git", "-C", @repo_root.to_s, "ls-tree", "-r", "--name-only", guard_merge_base, "--", ".github/workflows"
+    )
+    raise FleetError, "could not list guard base workflows: #{stderr.strip}" unless status.success?
+
+    stdout.lines(chomp: true).select { |path| workflow_file?(path) }
+  end
+
   def guard_base_config
     return @guard_base_config if defined?(@guard_base_config)
 
@@ -990,6 +1030,15 @@ class FleetSync
     "fleet guard: managed surface declassification rejected (#{surfaces.join(", ")}); " \
       "human pull requests cannot shrink the fleet-managed surface set. " \
       "Land opt-outs through the fleet sync bot after the hub canon changes."
+  end
+
+  def reusable_workflow_declassification_message(removed)
+    calls = removed.map do |path, workflow, base_count, current_count|
+      "#{path}: #{workflow.split("/").last} (#{base_count} -> #{current_count})"
+    end.join(", ")
+    "fleet guard: reusable workflow declassification rejected (#{calls}); " \
+      "consumer pull requests cannot remove first-party reusable workflow calls. " \
+      "Coordinate policy removals through the fleet hub."
   end
 
   def guard_fleet_config_ownership_message

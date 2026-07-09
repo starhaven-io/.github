@@ -18,8 +18,9 @@ Every fleet-relevant file in every consumer is assigned exactly one tier:
   outside is repo-owned.
 - Tier 3 files are rendered whole files: `dependabot.yml` and thin SHA-pinned
   callers for the reusable workflows in `.github/workflows/`.
-- Tier 4 files remain repo-owned, except first-party reusable workflow pin
-  lines are kept current by `fleet/sync.rb`.
+- Tier 4 files retain repo-owned orchestration. Fleet keeps first-party
+  reusable workflow pins current and rejects consumer PRs that remove an
+  established first-party reusable workflow call.
 
 Optional Tier 1 files are still byte-identical, but render only when the
 consumer opts in through `.fleet.yml`. The shared `.github/zizmor.yml` policy
@@ -60,13 +61,15 @@ Tier 3 (rendered files and thin callers):
 | `.github/workflows/link-check.yml` | caller of `reusable-link-check.yml` | targets, `build-site`, site directory, schedule |
 | `.github/workflows/codeql.yml` | caller of `reusable-codeql.yml` | languages, paths, runner, build mode and profile |
 | `.github/workflows/fleet-guard.yml` | caller of `reusable-fleet-guard.yml` | none |
-| first-party reusable workflow pins | `uses: starhaven-io/.github/.github/workflows/reusable-*.yml@...` lines in any workflow | sync keeps the SHA and fleet version comment current |
+| first-party reusable workflow calls | `uses: starhaven-io/.github/.github/workflows/reusable-*.yml@...` jobs in any workflow | sync keeps the SHA and fleet version comment current; guard prevents consumer PRs from removing established calls |
 
-Tier 4 stays repo-owned forever: `ci.yml` cores, release and deploy workflows,
-all AGENTS.md content outside the managed block, README bodies, repo-specific
-justfile recipes, `.fleet.yml` itself, and all source code. The only managed
-surface inside repo-owned workflows is a first-party reusable workflow pin line;
-the surrounding job logic remains repo-owned.
+Tier 4 includes repo-owned `ci.yml` orchestration, release and deploy
+workflows, all AGENTS.md content outside the managed block, README bodies,
+repo-specific justfile recipes, `.fleet.yml` itself, and all source code. Inside
+repo-owned workflows, Fleet owns the identity, multiplicity, and pin of each
+established first-party reusable workflow call within its workflow file.
+Triggers, conditions, matrices, inputs, dependency edges, and surrounding job
+logic remain repo-owned.
 
 ## Marker Convention
 
@@ -199,6 +202,16 @@ against the PR tree. Parameter changes pass when their rendered output is
 consistent; direct edits to managed files or blocks fail with a pointer back to
 this hub or to `.fleet.yml` parameters. Sync-bot and Dependabot PRs are exempt,
 and the job always reports a conclusion so the check can be required.
+
+First-party reusable workflow calls inside Tier 4 workflows are monotonic for
+consumer PRs: calls may be introduced, but a consumer PR cannot reduce the
+number of calls to a given reusable workflow within an existing workflow file.
+That prevents a policy job from being moved aside or replaced with a repo-local
+copy while leaving the rest of the repo-owned CI topology flexible. Intentional
+moves or removals are coordinated through the trusted hub and its sync bot.
+This protects the reusable call itself, not its execution: repo-owned
+conditions, inputs, path selection, and dependency edges can still cause the
+job to be skipped, and the guard does not claim to enforce those surfaces.
 
 The guard reads its hub version from the caller pin in the consumer checkout,
 and in this hub it checks a PR against its own in-tree canon, since a hub PR
