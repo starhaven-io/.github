@@ -3,6 +3,7 @@
 require "fileutils"
 require "open3"
 require "tmpdir"
+require "yaml"
 require "minitest/autorun"
 
 ROOT = File.expand_path("../..", __dir__)
@@ -235,6 +236,82 @@ class GuardRegressionsTest < Minitest::Test
     repo = scenario("add-canonical-reusable-pin")
     write_ci_workflow(repo, reusable_workflow_line(repo))
     commit_all(repo, "add ci workflow with canonical pin")
+
+    assert_sync_success(guard(repo))
+  end
+
+  def test_rejects_folded_reusable_pin
+    repo = scenario("folded-reusable-pin")
+    stale = "0" * 40
+    path = File.join(repo, ".github/workflows/ci.yml")
+    File.write(path, <<~YAML)
+      name: CI
+
+      on:
+        pull_request:
+
+      permissions: {}
+
+      jobs:
+        commits:
+          uses: >-
+            starhaven-io/.github/.github/workflows/reusable-conventional-commits.yml@#{stale}
+    YAML
+    commit_all(repo, "add folded reusable pin")
+
+    assert_rejects(["guard", guard(repo), "write every starhaven-io/.github reusable uses: as a single-line scalar"])
+  end
+
+  def test_rejects_escaped_reusable_pin
+    repo = scenario("escaped-reusable-pin")
+    stale = "0" * 40
+    path = File.join(repo, ".github/workflows/ci.yml")
+    escaped = "starhaven\\x2Dio/.github/.github/workflows/reusable\\x2Dconventional\\x2Dcommits.yml@#{stale}"
+    expected = "starhaven-io/.github/.github/workflows/reusable-conventional-commits.yml@#{stale}"
+    File.write(path, <<~YAML)
+      name: CI
+
+      on:
+        pull_request:
+
+      permissions: {}
+
+      jobs:
+        commits:
+          uses: "#{escaped}"
+    YAML
+
+    raw = File.read(path)
+    refute_includes raw.lines.grep(/uses:/).first, expected
+    decoded = YAML.safe_load(raw, permitted_classes: [], aliases: false)
+                  .fetch("jobs")
+                  .fetch("commits")
+                  .fetch("uses")
+    assert_equal expected, decoded
+    assert_sync_success(sync(repo, "--check"))
+    commit_all(repo, "add escaped reusable pin")
+
+    assert_rejects(["guard", guard(repo), "hidden reusable workflow pin rejected"])
+  end
+
+  def test_allows_single_line_quoted_canonical_reusable_pin
+    repo = scenario("quoted-canonical-reusable-pin")
+    ref = fleet_ref(repo)
+    version = fleet_version(repo)
+    path = File.join(repo, ".github/workflows/ci.yml")
+    File.write(path, <<~YAML)
+      name: CI
+
+      on:
+        pull_request:
+
+      permissions: {}
+
+      jobs:
+        commits:
+          uses: "starhaven-io/.github/.github/workflows/reusable-conventional-commits.yml@#{ref}" # #{version}
+    YAML
+    commit_all(repo, "add quoted canonical reusable pin")
 
     assert_sync_success(guard(repo))
   end
