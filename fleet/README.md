@@ -22,10 +22,6 @@ Every fleet-relevant file in every consumer is assigned exactly one tier:
   reusable workflow pins current and rejects consumer PRs that remove an
   established first-party reusable workflow call.
 
-Optional Tier 1 files are still byte-identical, but render only when the
-consumer opts in through `.fleet.yml`. The shared `.github/zizmor.yml` policy
-uses `zizmor-config: true`.
-
 ## Surface Matrix
 
 Tier 1:
@@ -38,7 +34,6 @@ Tier 1:
 | `CLAUDE.md` | exactly `@AGENTS.md` |
 | `LICENSE` | one canonical file per license type in `fleet/files/licenses/` |
 | `.mcp.json` | astro-docs config; consumers with `astro-docs: true` |
-| `.github/zizmor.yml` | shared Homebrew/actions policy; consumers with `zizmor-config: true` |
 
 Tier 2 (managed blocks):
 
@@ -118,7 +113,6 @@ params:
   link-check:
     targets: "README.md AGENTS.md"
     build-site: false
-  zizmor-config: true
   readme:
     badges:
       workflow: "ci.yml"
