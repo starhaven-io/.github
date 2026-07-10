@@ -45,10 +45,6 @@ class FleetSync
     "CLAUDE.md" => "files/CLAUDE.md"
   }.freeze
 
-  OPTIONAL_TIER1_FILES = {
-    "zizmor-config" => [".github/zizmor.yml", "files/zizmor-config.yml"]
-  }.freeze
-
   EXECUTABLE_PATHS = [
     ".githooks/commit-msg",
     ".githooks/pre-push"
@@ -77,7 +73,6 @@ class FleetSync
     pinprick-audit
     readme
     zizmor
-    zizmor-config
   ].freeze
 
   EXCEPTION_KEYS = %w[
@@ -210,7 +205,6 @@ class FleetSync
   def validate_params(params)
     reject_unknown_keys(params, PARAM_KEYS, ".fleet.yml params")
     validate_boolean(params, "astro-docs", ".fleet.yml params.astro-docs")
-    validate_boolean(params, "zizmor-config", ".fleet.yml params.zizmor-config")
     validate_dependabot(params["dependabot"]) if params.key?("dependabot")
     validate_link_check(params["link-check"]) if params.key?("link-check")
     validate_codeql(params["codeql"]) if params.key?("codeql")
@@ -449,16 +443,9 @@ class FleetSync
 
     params = config_params(config)
     write_file(".mcp.json", read_path(hub_path("files/mcp.json")), ".mcp.json") if params["astro-docs"]
-    render_optional_tier1(params)
 
     EXECUTABLE_PATHS.each do |path|
       chmod_executable(path)
-    end
-  end
-
-  def render_optional_tier1(params)
-    OPTIONAL_TIER1_FILES.each do |param, (dest, source)|
-      write_file(dest, read_path(hub_path(source)), dest) if params[param]
     end
   end
 
@@ -821,10 +808,6 @@ class FleetSync
     files = TIER1_FILES.keys
     files << "LICENSE" unless config_license(config) == "none"
     files << ".mcp.json" if params["astro-docs"]
-    OPTIONAL_TIER1_FILES.each do |param, (dest, _source)|
-      files << dest if params[param]
-    end
-
     files << ".github/workflows/fleet-guard.yml"
     files << ".github/dependabot.yml" if params["dependabot"]
     files << ".github/workflows/zizmor.yml" unless exception?(config, "zizmor")
