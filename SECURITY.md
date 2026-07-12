@@ -5,7 +5,7 @@
 Please report suspected vulnerabilities privately by emailing
 [security@starhaven.io](mailto:security@starhaven.io) or using GitHub's private
 vulnerability reporting flow from the affected repository's **Security** tab.
-Do not open a public issue or discussion for an undisclosed vulnerability.
+Do not open a public issue for an undisclosed vulnerability.
 
 Useful reports include:
 
