@@ -24,10 +24,30 @@ updates:
       exclude:
         - "starhaven-io/*"
 <% end -%>
-<% if entry.fetch("package-ecosystem") == "github-actions" -%>
+<% if entry.fetch("package-ecosystem") == "github-actions" || entry["ignore"] -%>
     ignore:
+<% if entry.fetch("package-ecosystem") == "github-actions" -%>
       # Fleet pins are owned by the sync; Dependabot never writes them.
       - dependency-name: "starhaven-io/.github/*"
+<% end -%>
+<% entry.fetch("ignore", []).each do |ignore| -%>
+<% if ignore["reason"] -%>
+      # <%= ignore.fetch("reason") %>
+<% end -%>
+      - dependency-name: <%= scalar(ignore.fetch("dependency-name")) %>
+<% if ignore["versions"] -%>
+        versions:
+<% ignore.fetch("versions").each do |version| -%>
+          - <%= scalar(version) %>
+<% end -%>
+<% end -%>
+<% if ignore["update-types"] -%>
+        update-types:
+<% ignore.fetch("update-types").each do |update_type| -%>
+          - <%= scalar(update_type) %>
+<% end -%>
+<% end -%>
+<% end -%>
 <% end -%>
     groups:
       <%= scalar(entry.fetch("group")) %>:

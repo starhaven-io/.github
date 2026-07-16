@@ -84,6 +84,11 @@ class FleetSync
   ].freeze
 
   DEPENDABOT_DEPENDENCY_TYPES = %w[all direct indirect production development].freeze
+  DEPENDABOT_IGNORE_UPDATE_TYPES = %w[
+    version-update:semver-major
+    version-update:semver-minor
+    version-update:semver-patch
+  ].freeze
   CODEQL_BUILD_MODES = ["", "none", "autobuild", "manual"].freeze
   CODEQL_BUILD_PROFILES = ["", "swift-package", "brewy-xcode"].freeze
   FLEET_MARKER_PATTERN = /<!--\s*fleet:(?:block|end)\b/
@@ -199,7 +204,7 @@ class FleetSync
   def validate_config_text(text, path)
     return unless control_char?(text, allow_lf: true)
 
-    raise FleetError, "#{path} must not contain control characters"
+    raise FleetError, "#{path} must not contain control characters or line separators"
   end
 
   def validate_params(params)
@@ -241,13 +246,14 @@ class FleetSync
   def validate_dependabot_entry(entry, path)
     raise FleetError, "#{path} must be a mapping" unless entry.is_a?(Hash)
 
-    reject_unknown_keys(entry, %w[allow directories directory group package-ecosystem], path)
+    reject_unknown_keys(entry, %w[allow directories directory group ignore package-ecosystem], path)
     ecosystem = entry["package-ecosystem"]
     validate_dependabot_ecosystem(ecosystem, "#{path}.package-ecosystem")
     validate_plain_string(entry["directory"], "#{path}.directory") if entry.key?("directory")
     validate_string_array(entry, "directories", "#{path}.directories")
     validate_identifier(entry["group"], "#{path}.group") if entry.key?("group")
     validate_dependabot_allow(entry["allow"], "#{path}.allow") if entry.key?("allow")
+    validate_dependabot_ignore(entry["ignore"], "#{path}.ignore") if entry.key?("ignore")
   end
 
   def validate_dependabot_allow(value, path)
@@ -259,6 +265,25 @@ class FleetSync
 
       reject_unknown_keys(entry, %w[dependency-type], entry_path)
       validate_enum(entry["dependency-type"], DEPENDABOT_DEPENDENCY_TYPES, "#{entry_path}.dependency-type")
+    end
+  end
+
+  def validate_dependabot_ignore(value, path)
+    raise FleetError, "#{path} must be an array" unless value.is_a?(Array)
+    raise FleetError, "#{path} must not be empty" if value.empty?
+
+    value.each_with_index do |entry, index|
+      entry_path = "#{path}[#{index}]"
+      raise FleetError, "#{entry_path} must be a mapping" unless entry.is_a?(Hash)
+
+      reject_unknown_keys(entry, %w[dependency-name reason update-types versions], entry_path)
+      validate_plain_string(entry["dependency-name"], "#{entry_path}.dependency-name")
+      validate_plain_string(entry["reason"], "#{entry_path}.reason") if entry.key?("reason")
+      validate_string_array(entry, "versions", "#{entry_path}.versions")
+      raise FleetError, "#{entry_path}.versions must not be empty" if entry.key?("versions") && entry["versions"].empty?
+      next unless entry.key?("update-types")
+
+      validate_enum_array(entry["update-types"], DEPENDABOT_IGNORE_UPDATE_TYPES, "#{entry_path}.update-types")
     end
   end
 
@@ -390,12 +415,16 @@ class FleetSync
 
   def validate_plain_string(value, path)
     raise FleetError, "#{path} must be a string" unless value.is_a?(String)
-    raise FleetError, "#{path} must not contain control characters" if control_char?(value)
+    return unless control_char?(value)
+
+    raise FleetError, "#{path} must not contain control characters or line separators"
   end
 
   def validate_markdown_text(value, path)
     raise FleetError, "#{path} must be a string" unless value.is_a?(String)
-    raise FleetError, "#{path} must not contain control characters" if control_char?(value, allow_lf: true)
+    if control_char?(value, allow_lf: true)
+      raise FleetError, "#{path} must not contain control characters or line separators"
+    end
 
     validate_no_fleet_marker(value, path)
   end
@@ -419,6 +448,15 @@ class FleetSync
     raise FleetError, "#{path} must be one of: #{allowed.join(", ")}"
   end
 
+  def validate_enum_array(value, allowed, path)
+    raise FleetError, "#{path} must be an array" unless value.is_a?(Array)
+    raise FleetError, "#{path} must not be empty" if value.empty?
+
+    value.each_with_index do |entry, index|
+      validate_enum(entry, allowed, "#{path}[#{index}]")
+    end
+  end
+
   def validate_advanced_security(value, path)
     return if [true, false, "true", "false", SAME_ORG_ADVANCED_SECURITY].include?(value)
 
@@ -429,7 +467,7 @@ class FleetSync
     value.each_codepoint.any? do |codepoint|
       next false if allow_lf && codepoint == 0x0a
 
-      codepoint < 0x20 || codepoint == 0x7f || (0x80..0x9f).cover?(codepoint)
+      codepoint < 0x20 || codepoint == 0x7f || (0x80..0x9f).cover?(codepoint) || (0x2028..0x2029).cover?(codepoint)
     end
   end
 
