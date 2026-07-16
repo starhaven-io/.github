@@ -18,12 +18,12 @@ check:
         skipped+=("$2; install with: $3")
     }
     run diff git diff --check
-    run guard-regressions ruby fleet/test/guard_regressions_test.rb
     if ! command -v bundle &>/dev/null; then
-        skip rubocop "bundle not found" "brew install ruby"
+        skip fleet-bundle "bundle not found" "brew install ruby"
     elif ! BUNDLE_GEMFILE=fleet/Gemfile bundle check &>/dev/null; then
-        skip rubocop "fleet bundle not installed" "BUNDLE_GEMFILE=fleet/Gemfile bundle install"
+        skip fleet-bundle "fleet bundle not installed" "BUNDLE_GEMFILE=fleet/Gemfile bundle install"
     else
+        run guard-regressions env BUNDLE_GEMFILE=fleet/Gemfile bundle exec ruby fleet/test/guard_regressions_test.rb
         run rubocop env BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop --config fleet/.rubocop.yml --cache false fleet/
     fi
     if command -v zizmor &>/dev/null; then
