@@ -51,6 +51,11 @@ jobs:
             end
           '
 
+      - name: Run regression suite
+        env:
+          BUNDLE_GEMFILE: fleet/Gemfile
+        run: bundle exec ruby fleet/test/guard_regressions_test.rb
+
       - name: Lint renderer
         env:
           BUNDLE_GEMFILE: fleet/Gemfile
