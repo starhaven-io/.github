@@ -23,6 +23,9 @@ updates:
 <% if entry.fetch("package-ecosystem") == "github-actions" -%>
       exclude:
         - "starhaven-io/*"
+        # A new Ruby is unusable until setup-ruby knows it exists, so a
+        # cooldown here delays every Ruby bump for no safety.
+        - "ruby/setup-ruby"
 <% end -%>
 <% if entry.fetch("package-ecosystem") == "github-actions" || entry["ignore"] -%>
     ignore:
