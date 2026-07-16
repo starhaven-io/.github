@@ -175,6 +175,118 @@ class GuardRegressionsTest < Minitest::Test
     assert_sync_success(sync(repo, "--check"))
   end
 
+  def test_renders_dependabot_entry_policies
+    repo = scenario("dependabot-entry-policies")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("dependabot") << {
+      "package-ecosystem" => "npm",
+      "group" => "npm-dependencies",
+      "directory" => "/",
+      "ignore" => [
+        {
+          "dependency-name" => "typescript",
+          "reason" => "TypeScript 7.0 lacks Astro's required API; reassess with 7.1: https://github.com/withastro/astro/issues/17268",
+          "versions" => [">=7.0.0 <7.1.0"]
+        },
+        {
+          "dependency-name" => "eslint",
+          "update-types" => ["version-update:semver-major"]
+        }
+      ]
+    }
+    write_fleet_config(repo, config)
+
+    assert_sync_success(sync(repo))
+
+    rendered_path = File.join(repo, ".github/dependabot.yml")
+    rendered_text = File.read(rendered_path)
+    rendered = YAML.safe_load(rendered_text, permitted_classes: [], aliases: false)
+    npm = rendered.fetch("updates").find { |entry| entry.fetch("package-ecosystem") == "npm" }
+    assert_includes rendered_text,
+                    "# TypeScript 7.0 lacks Astro's required API; reassess with 7.1: " \
+                    "https://github.com/withastro/astro/issues/17268"
+    assert_equal(
+      [
+        { "dependency-name" => "typescript", "versions" => [">=7.0.0 <7.1.0"] },
+        { "dependency-name" => "eslint", "update-types" => ["version-update:semver-major"] }
+      ],
+      npm.fetch("ignore")
+    )
+  end
+
+  def test_preserves_fleet_pin_ignore_with_custom_github_actions_policy
+    repo = scenario("github-actions-custom-ignore")
+    config = fleet_config(repo)
+    github_actions = config.fetch("params").fetch("dependabot").find do |entry|
+      entry.fetch("package-ecosystem") == "github-actions"
+    end
+    github_actions["ignore"] = [
+      {
+        "dependency-name" => "actions/setup-node",
+        "update-types" => ["version-update:semver-major"]
+      }
+    ]
+    write_fleet_config(repo, config)
+
+    assert_sync_success(sync(repo))
+
+    rendered = YAML.safe_load_file(File.join(repo, ".github/dependabot.yml"), permitted_classes: [], aliases: false)
+    rendered_actions = rendered.fetch("updates").find { |entry| entry.fetch("package-ecosystem") == "github-actions" }
+    assert_equal(
+      [
+        { "dependency-name" => "starhaven-io/.github/*" },
+        { "dependency-name" => "actions/setup-node", "update-types" => ["version-update:semver-major"] }
+      ],
+      rendered_actions.fetch("ignore")
+    )
+  end
+
+  def test_rejects_unknown_dependabot_ignore_key
+    repo = scenario("unknown-dependabot-ignore-key")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("dependabot").first["ignore"] = [
+      { "dependency-name" => "typescript", "rationale" => "unsupported" }
+    ]
+    write_fleet_config(repo, config)
+
+    assert_rejects(["sync", sync(repo), "contains unknown keys: rationale"])
+  end
+
+  def test_rejects_unicode_line_breaks_in_dependabot_reason
+    ["\u2028", "\u2029"].each do |line_break|
+      repo = scenario("dependabot-reason-u#{line_break.ord.to_s(16)}")
+      config = fleet_config(repo)
+      config.fetch("params").fetch("dependabot").first["ignore"] = [
+        {
+          "dependency-name" => "typescript",
+          "reason" => "unsupported#{line_break}      - dependency-name: astro"
+        }
+      ]
+      write_fleet_config(repo, config)
+
+      assert_rejects(
+        ["sync", sync(repo), ".reason must not contain control characters or line separators"]
+      )
+    end
+  end
+
+  def test_rejects_unicode_line_breaks_in_markdown_text
+    ["\u2028", "\u2029"].each do |line_break|
+      repo = scenario("readme-license-u#{line_break.ord.to_s(16)}")
+      config = fleet_config(repo)
+      config.fetch("params").fetch("readme").fetch("license")["text"] = "UNICODE_LINE_BREAK_TEST"
+      yaml = config.to_yaml.sub(
+        "UNICODE_LINE_BREAK_TEST",
+        %("First line\\nSecond\\u#{line_break.ord.to_s(16)}hidden")
+      )
+      File.write(File.join(repo, ".fleet.yml"), yaml)
+
+      assert_rejects(
+        ["sync", sync(repo), ".text must not contain control characters or line separators"]
+      )
+    end
+  end
+
   def test_sync_updates_reusable_pins_in_repo_owned_workflows
     repo = scenario("repo-owned-reusable-pin-sync")
     write_ci_workflow(repo, reusable_workflow_line(repo, ref: "0" * 40, version: "v2026.07.05.9"))

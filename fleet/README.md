@@ -50,7 +50,7 @@ Tier 3 (rendered files and thin callers):
 
 | File | Mechanism | Parameters |
 |------|-----------|------------|
-| `.github/dependabot.yml` | rendered file | ecosystems and directories |
+| `.github/dependabot.yml` | rendered file | ecosystems, directories, and dependency policies |
 | `.github/workflows/zizmor.yml` | caller of `reusable-zizmor.yml` | extra push paths, schedule, timeout; defaults render the canonical shape |
 | `.github/workflows/pinprick-audit.yml` | caller of `reusable-pinprick-audit.yml` | `advanced-security` (false also drops the `security-events` grant), `fail-on-findings`, timeout |
 | `.github/workflows/link-check.yml` | caller of `reusable-link-check.yml` | targets, `build-site`, site directory, schedule |
@@ -117,6 +117,22 @@ params:
     badges:
       workflow: "ci.yml"
 exceptions: {}
+```
+
+Use the array form when a Dependabot entry needs per-repository policy. The
+`ignore` list accepts Dependabot dependency names plus version ranges or
+semantic update types:
+
+```yaml
+params:
+  dependabot:
+    - package-ecosystem: "npm"
+      group: "npm-dependencies"
+      directory: "/"
+      ignore:
+        - dependency-name: "typescript"
+          reason: "TypeScript 7.0 lacks Astro's required API; reassess with 7.1: https://github.com/withastro/astro/issues/17268"
+          versions: [">=7.0.0 <7.1.0"]
 ```
 
 Exceptions are explicit and cited; a managed surface with an exception entry is
