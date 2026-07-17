@@ -120,8 +120,10 @@ class FleetSync
   end
 
   def run
+    validate_guard_repository_identity
     config = load_config
     validate_config(config)
+    validate_rendered_config_path
     assert_unique_marked_blocks(config)
 
     return run_guard(config) if @guard_base
@@ -134,6 +136,7 @@ class FleetSync
   private
 
   def render_all(config)
+    render_fleet_config
     render_tier1(config)
     render_tier2(config)
     render_tier3(config)
@@ -142,6 +145,8 @@ class FleetSync
 
   def run_guard(config)
     head_managed = managed_surfaces(config)
+    # This comparison requires the hub checkout selected by the base caller pin;
+    # latest hub canon can race a consumer rollout and invent declassification.
     base_managed = guard_base_config ? managed_surfaces(guard_base_config) : []
     declassified_surfaces = base_managed - head_managed
     raise FleetError, guard_declassification_message(declassified_surfaces) if declassified_surfaces.any? && !hub_repo?
@@ -169,24 +174,74 @@ class FleetSync
   end
 
   def load_config
-    path = repo_path(".fleet.yml")
-    raise FleetError, non_regular_file_message(".fleet.yml") if managed_path_present?(path) && !regular_file?(path)
+    repo_name = required_repo_name
+    repos = load_repo_registry.fetch("repos")
+    raise FleetError, "#{repo_name} is not listed in fleet/repos.yml" unless repos.include?(repo_name)
 
-    if regular_file?(path)
-      text = read_path(path)
-      validate_config_text(text, ".fleet.yml")
-      begin
-        return YAML.safe_load(text, permitted_classes: [], aliases: false)
-      rescue Psych::Exception => e
-        raise FleetError, ".fleet.yml could not be parsed: #{e.message}"
-      end
-    end
+    relative_path = "fleet/repos/#{repo_name}.yml"
+    path = hub_path("repos/#{repo_name}.yml")
+    raise FleetError, "#{relative_path} is missing" unless managed_path_present?(path)
+    raise FleetError, non_regular_file_message(relative_path) unless regular_file?(path)
 
-    raise FleetError, ".fleet.yml is missing; hand-author .fleet.yml before running fleet sync"
+    @config_text = read_path(path)
+    validate_config_text(@config_text, relative_path)
+    YAML.safe_load(@config_text, permitted_classes: [], aliases: false)
+  rescue Psych::Exception => e
+    raise FleetError, "#{relative_path} could not be parsed: #{e.message}"
+  end
+
+  def load_repo_registry
+    return @repo_registry if defined?(@repo_registry)
+
+    path = hub_path("repos.yml")
+    raise FleetError, "fleet/repos.yml is missing" unless regular_file?(path)
+
+    text = read_path(path)
+    validate_config_text(text, "fleet/repos.yml")
+    registry = YAML.safe_load(text, permitted_classes: [], aliases: false)
+    raise FleetError, "fleet/repos.yml must be a mapping" unless registry.is_a?(Hash)
+
+    reject_unknown_keys(registry, %w[owner repos schema], "fleet/repos.yml")
+    raise FleetError, "fleet/repos.yml schema must be 1" unless registry["schema"] == 1
+    raise FleetError, "fleet/repos.yml owner must be starhaven-io" unless registry["owner"] == "starhaven-io"
+
+    repos = registry["repos"]
+    raise FleetError, "fleet/repos.yml repos must be an array" unless repos.is_a?(Array)
+    raise FleetError, "fleet/repos.yml repos must not be empty" if repos.empty?
+
+    repos.each_with_index { |repo, index| validate_repo_name(repo, "fleet/repos.yml repos[#{index}]") }
+    duplicates = repos.tally.select { |_repo, count| count > 1 }.keys
+    raise FleetError, "fleet/repos.yml repos contains duplicates: #{duplicates.sort.join(", ")}" if duplicates.any?
+
+    validate_repo_config_inventory(repos)
+    @repo_registry = registry
+  rescue Psych::Exception => e
+    raise FleetError, "fleet/repos.yml could not be parsed: #{e.message}"
+  end
+
+  def validate_repo_config_inventory(repos)
+    directory = hub_path("repos")
+    raise FleetError, "fleet/repos must be a directory" unless directory.directory? && !directory.symlink?
+
+    expected = repos.map { |repo| "#{repo}.yml" }.sort
+    # Dir.children is required here because the hub's own config is the .github.yml dotfile.
+    actual = Dir.children(directory).select { |entry| entry.end_with?(".yml") }.sort
+    missing = expected - actual
+    orphaned = actual - expected
+    non_regular = (expected & actual).reject { |entry| regular_file?(directory.join(entry)) }
+    return if missing.empty? && orphaned.empty? && non_regular.empty?
+
+    details = []
+    details << "missing: #{missing.join(", ")}" if missing.any?
+    details << "orphaned: #{orphaned.join(", ")}" if orphaned.any?
+    details << "not regular files: #{non_regular.join(", ")}" if non_regular.any?
+    raise FleetError, "fleet/repos inventory mismatch (#{details.join("; ")})"
   end
 
   def validate_config(config)
     raise FleetError, ".fleet.yml must be a mapping" unless config.is_a?(Hash)
+
+    reject_unknown_keys(config, %w[exceptions license params schema], ".fleet.yml")
     raise FleetError, ".fleet.yml schema must be 1" unless config["schema"] == 1
 
     license = config["license"]
@@ -420,6 +475,23 @@ class FleetSync
     raise FleetError, "#{path} must not contain control characters or line separators"
   end
 
+  def validate_repo_name(value, path)
+    validate_identifier(value, path)
+    return unless %w[. ..].include?(value)
+
+    raise FleetError, "#{path} must name a repository"
+  end
+
+  def validate_guard_repository_identity
+    repository = ENV.fetch("GITHUB_REPOSITORY", nil)
+    return unless @guard_base && repository
+
+    expected = "starhaven-io/#{required_repo_name}"
+    return if repository == expected
+
+    raise FleetError, "--repo-name #{required_repo_name} does not match guard repository #{repository}"
+  end
+
   def validate_markdown_text(value, path)
     raise FleetError, "#{path} must be a string" unless value.is_a?(String)
     if control_char?(value, allow_lf: true)
@@ -485,6 +557,10 @@ class FleetSync
     EXECUTABLE_PATHS.each do |path|
       chmod_executable(path)
     end
+  end
+
+  def render_fleet_config
+    write_file(".fleet.yml", @config_text, ".fleet.yml")
   end
 
   def render_tier2(config)
@@ -726,7 +802,6 @@ class FleetSync
   def reject_consumer_fleet_config_edit
     return if hub_repo?
     return unless guard_changed_paths.include?(".fleet.yml")
-    return unless guard_base_config
 
     raise FleetError, guard_fleet_config_ownership_message
   end
@@ -843,7 +918,7 @@ class FleetSync
 
   def managed_whole_files(config)
     params = config_params(config)
-    files = TIER1_FILES.keys
+    files = [".fleet.yml", *TIER1_FILES.keys]
     files << "LICENSE" unless config_license(config) == "none"
     files << ".mcp.json" if params["astro-docs"]
     files << ".github/workflows/fleet-guard.yml"
@@ -1043,8 +1118,8 @@ class FleetSync
 
   def guard_failure_message(managed_changes)
     "fleet guard: managed surface change rejected (#{managed_changes.join(", ")}); " \
-      "fleet-managed files and blocks change in starhaven-io/.github, or through .fleet.yml parameters. " \
-      "If this PR combines parameter changes with rendered output after a fleet release, bump the fleet pins first."
+      "fleet-managed files and blocks change through fleet/repos/#{required_repo_name}.yml in starhaven-io/.github. " \
+      "After the hub change is released, the fleet sync bot renders it into the consumer."
   end
 
   def guard_declassification_message(surfaces)
@@ -1064,7 +1139,9 @@ class FleetSync
 
   def guard_fleet_config_ownership_message
     "fleet guard: .fleet.yml is hub-owned fleet configuration; " \
-      "a consumer pull request cannot change it, so land configuration changes through the fleet sync bot from the hub."
+      "a consumer pull request cannot change it. " \
+      "Change fleet/repos/#{required_repo_name}.yml in starhaven-io/.github; " \
+      "the fleet sync bot renders .fleet.yml from that hub config."
   end
 
   def hidden_reusable_pin_message(path, pins)
@@ -1236,7 +1313,21 @@ class FleetSync
   end
 
   def repo_name_for_urls
-    @repo_name || @repo_root.basename.to_s
+    required_repo_name
+  end
+
+  def required_repo_name
+    raise FleetError, "--repo-name is required" if @repo_name.nil? || @repo_name.empty?
+
+    validate_repo_name(@repo_name, "--repo-name")
+    @repo_name
+  end
+
+  def validate_rendered_config_path
+    path = repo_path(".fleet.yml")
+    return unless managed_path_present?(path) && !regular_file?(path)
+
+    raise FleetError, non_regular_file_message(".fleet.yml")
   end
 
   def report_changes

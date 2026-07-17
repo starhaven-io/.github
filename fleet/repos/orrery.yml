@@ -1,0 +1,18 @@
+schema: 1
+license: "none"
+params:
+  dependabot:
+    - package-ecosystem: "github-actions"
+      group: "github-actions"
+      directory: "/"
+    - package-ecosystem: "terraform"
+      group: "terraform"
+      directories: ["/", "/modules/*"]
+  pinprick-audit:
+    advanced-security: "false"
+    fail-on-findings: true
+    timeout-minutes: 5
+    push-paths: [".github/workflows/**"]
+exceptions:
+  codeql: "terraform-only private infra; tofu.yml owns IaC validation"
+  zizmor: "private repo without GHAS: no SARIF upload; zizmor.yml is a hand-rolled direct gate"

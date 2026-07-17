@@ -17,7 +17,8 @@ Every fleet-relevant file in every consumer is assigned exactly one tier:
   `fleet:block` markers. Content inside the fence is hub-owned; everything
   outside is repo-owned.
 - Tier 3 files are rendered whole files: `dependabot.yml` and thin SHA-pinned
-  callers for the reusable workflows in `.github/workflows/`.
+  callers for the reusable workflows in `.github/workflows/`. Each consumer's
+  `.fleet.yml` is also rendered from its hub-owned per-repository config.
 - Tier 4 files retain repo-owned orchestration. Fleet keeps first-party
   reusable workflow pins current and rejects consumer PRs that remove an
   established first-party reusable workflow call.
@@ -50,6 +51,7 @@ Tier 3 (rendered files and thin callers):
 
 | File | Mechanism | Parameters |
 |------|-----------|------------|
+| `.fleet.yml` | rendered copy of `fleet/repos/<name>.yml` | complete effective fleet config, kept consumer-side for discoverability and guard base-state classification |
 | `.github/dependabot.yml` | rendered file | ecosystems, directories, and dependency policies |
 | `.github/workflows/zizmor.yml` | caller of `reusable-zizmor.yml` | extra push paths, schedule, timeout; defaults render the canonical shape |
 | `.github/workflows/pinprick-audit.yml` | caller of `reusable-pinprick-audit.yml` | `advanced-security` (false also drops the `security-events` grant), `fail-on-findings`, timeout |
@@ -60,7 +62,7 @@ Tier 3 (rendered files and thin callers):
 
 Tier 4 includes repo-owned `ci.yml` orchestration, release and deploy
 workflows, all AGENTS.md content outside the managed block, README bodies,
-repo-specific justfile recipes, `.fleet.yml` itself, and all source code. Inside
+repo-specific justfile recipes, and all source code. Inside
 repo-owned workflows, Fleet owns the identity, multiplicity, and pin of each
 established first-party reusable workflow call within its workflow file.
 Triggers, conditions, matrices, inputs, dependency edges, and surrounding job
@@ -89,16 +91,24 @@ consumers do not reformat inside the fence; hash fences stay tight. Markers
 carry the constraint "do not hand-edit inside". A missing or mangled marker
 fails the sync run loudly rather than guessing.
 
-The renderer fails on missing or mangled markers. It also requires each
-consumer to carry a hand-authored `.fleet.yml`; fleet does not derive consumer
-config from existing workflow files.
+The renderer fails on missing or mangled markers. It reads configuration only
+from the hub and renders the configured bytes to the consumer's `.fleet.yml`;
+it never derives configuration from existing consumer workflow files.
 
 ## Per-Repo Config
 
-Consumer parameters live in `.fleet.yml` in the consumer repository, not here.
-The hub stores the canonical content and `fleet/repos.yml`, which is only the
-consumer list. Parameters live consumer-side so each repo's own PR history
-shows its parameter changes.
+`fleet/repos.yml` is the small, flat registry of consumer names. The canonical
+parameters for each consumer live in `fleet/repos/<name>.yml`, so a single
+repository's configuration has a focused, legible review diff without turning
+the registry into one large nested document. For example, `starhaven.io` reads
+`fleet/repos/starhaven.io.yml`, and this hub's own config is
+`fleet/repos/.github.yml`.
+
+The sync renders that file as the consumer's `.fleet.yml`. The copy stays in
+the consumer so contributors can discover the effective policy without
+visiting the hub, and so the guard can classify surfaces that were managed in
+the pull request's base. It is not an edit surface: configuration changes start
+in the hub file and arrive through the fleet sync bot.
 
 ```yaml
 schema: 1
@@ -119,9 +129,10 @@ params:
 exceptions: {}
 ```
 
-Use the array form when a Dependabot entry needs per-repository policy. The
-`ignore` list accepts Dependabot dependency names plus version ranges or
-semantic update types:
+Use the array form when a Dependabot entry needs per-repository policy. For
+example, this entry can be added to
+`fleet/repos/starhaven.io.yml`. The `ignore` list accepts Dependabot dependency
+names plus version ranges or semantic update types:
 
 ```yaml
 params:
@@ -146,6 +157,13 @@ exceptions:
 
 Use `pinprick-audit` for the workflow and `pinprick-audit-recipe` for the
 justfile recipe when only one of those surfaces is exempt.
+
+To adopt a repository, add its name to `fleet/repos.yml` and add its validated
+`fleet/repos/<name>.yml` config in the same hub change. The first sync bot pull
+request creates `.fleet.yml` together with the other managed surfaces. A human
+consumer pull request cannot create or change `.fleet.yml`, even when the base
+branch has no copy; this keeps adoption on the same trusted path as later
+configuration changes.
 
 ## Reusable Workflows
 
@@ -192,26 +210,28 @@ push itself.
 
 `fleet-sync.yml` runs on pushes to `main` touching `fleet/**` or the reusable
 workflows, on a weekly schedule, and by dispatch. Per consumer in
-`fleet/repos.yml` it clones the repo, reads and validates `.fleet.yml`, renders
-tiers 1 through 3 plus first-party reusable workflow pins in repo-owned
-workflows, and diffs against the working tree. If anything differs it opens or
-updates a single PR on branch `fleet-sync-<version>` titled
-`chore(fleet): sync managed surfaces <version>`, through a verified
-`createCommitOnBranch` commit; PRs from superseded versions are closed by the
-next sync. The PR body lists each converged surface, and that list is the drift
-alarm. A repo in canon produces no PR; scheduled silence is the health signal.
+`fleet/repos.yml` it clones the repo, reads and validates the matching hub
+config, renders `.fleet.yml`, tiers 1 through 3, and first-party reusable
+workflow pins in repo-owned workflows, then diffs against the working tree. If
+anything differs it opens or updates a single PR on branch
+`fleet-sync-<version>` titled `chore(fleet): sync managed surfaces <version>`,
+through a verified `createCommitOnBranch` commit; PRs from superseded versions
+are closed by the next sync. The PR body lists each converged surface, and that
+list is the drift alarm. A repo in canon produces no PR; scheduled silence is
+the health signal.
 
 ## Pull Request Guard
 
 Every consumer receives `.github/workflows/fleet-guard.yml`, a required PR
-check that calls `reusable-fleet-guard.yml`. The guard ignores `.fleet.yml`
-itself, then looks for PR changes to tier 1 files, tier 3 rendered files, and
-the content inside tier 2 `fleet:block` markers. If none changed, it exits
-silently. If managed surfaces changed, it runs the renderer in check mode
-against the PR tree. Parameter changes pass when their rendered output is
-consistent; direct edits to managed files or blocks fail with a pointer back to
-this hub or to `.fleet.yml` parameters. Sync-bot and Dependabot PRs are exempt,
-and the job always reports a conclusion so the check can be required.
+check that calls `reusable-fleet-guard.yml`. The guard rejects any human pull
+request that creates or changes `.fleet.yml`, then looks for PR changes to tier
+1 files, tier 3 rendered files, and the content inside tier 2 `fleet:block`
+markers. If none changed, it exits silently. If managed surfaces changed, it
+runs the renderer in check mode against the PR tree using the hub config pinned
+by the base branch's guard caller. Direct edits to managed files or blocks fail
+with the exact `fleet/repos/<name>.yml` path to change in this hub. Sync-bot and
+Dependabot PRs are exempt, and the job always reports a conclusion so the check
+can be required.
 
 First-party reusable workflow calls inside Tier 4 workflows are monotonic for
 consumer PRs: calls may be introduced, but a consumer PR cannot reduce the
@@ -267,3 +287,6 @@ Guard a pull request branch against its base:
 ```bash
 ruby fleet/sync.rb --repo-root ../midden --repo-name midden --guard origin/main
 ```
+
+`--repo-name` is required and must name an entry in `fleet/repos.yml`; it
+selects the matching hub-owned config file.
