@@ -27,6 +27,11 @@ module GuardHelpers
     CommandResult.new(stdout: stdout, stderr: stderr, status: status)
   end
 
+  def run_command_env(env, cwd, *argv)
+    stdout, stderr, status = Open3.capture3(env, *argv, chdir: cwd)
+    CommandResult.new(stdout: stdout, stderr: stderr, status: status)
+  end
+
   def git(repo, *args)
     result = run_command(repo, "git", *args)
     return result if result.success?
@@ -46,12 +51,24 @@ module GuardHelpers
     sync(repo, "--guard", "HEAD~1")
   end
 
+  def fleet_config_path(repo)
+    File.join(repo, "fleet/repos/.github.yml")
+  end
+
+  def rendered_fleet_config_path(repo)
+    File.join(repo, ".fleet.yml")
+  end
+
   def fleet_config(repo)
-    YAML.safe_load_file(File.join(repo, ".fleet.yml"), permitted_classes: [], aliases: false)
+    YAML.safe_load_file(fleet_config_path(repo), permitted_classes: [], aliases: false)
   end
 
   def write_fleet_config(repo, config)
-    File.write(File.join(repo, ".fleet.yml"), config.to_yaml)
+    File.write(fleet_config_path(repo), config.to_yaml)
+  end
+
+  def write_rendered_fleet_config(repo, config)
+    File.write(rendered_fleet_config_path(repo), config.to_yaml)
   end
 
   def fleet_version(repo)
@@ -175,6 +192,81 @@ class GuardRegressionsTest < Minitest::Test
     assert_sync_success(sync(repo, "--check"))
   end
 
+  def test_renders_fleet_config_for_adoption
+    repo = scenario("render-fleet-config-adoption")
+    FileUtils.rm_f(rendered_fleet_config_path(repo))
+
+    assert_sync_success(sync(repo))
+
+    assert_equal File.read(fleet_config_path(repo)), File.read(rendered_fleet_config_path(repo))
+    assert_sync_success(sync(repo, "--check"))
+  end
+
+  def test_consumer_fleet_config_does_not_control_rendering
+    repo = scenario("consumer-fleet-config-ignored")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("pinprick-audit")["fail-on-findings"] = false
+    write_rendered_fleet_config(repo, config)
+
+    assert_sync_success(sync(repo))
+
+    assert_equal File.read(fleet_config_path(repo)), File.read(rendered_fleet_config_path(repo))
+    assert_sync_success(sync(repo, "--check"))
+  end
+
+  def test_rejects_unknown_repo_registry_key
+    repo = scenario("unknown-repo-registry-key")
+    registry_path = File.join(repo, "fleet/repos.yml")
+    registry = YAML.safe_load_file(registry_path, permitted_classes: [], aliases: false)
+    registry["unexpected"] = true
+    File.write(registry_path, registry.to_yaml)
+
+    assert_rejects(["sync", sync(repo), "fleet/repos.yml contains unknown keys: unexpected"])
+  end
+
+  def test_rejects_unlisted_repo
+    repo = scenario("unlisted-repo")
+    result = run_command(
+      repo,
+      *SYNC,
+      "--hub-root", ".",
+      "--repo-root", ".",
+      "--repo-name", "unlisted"
+    )
+
+    assert_rejects(["sync", result, "unlisted is not listed in fleet/repos.yml"])
+  end
+
+  def test_rejects_missing_hub_fleet_config
+    repo = scenario("missing-hub-fleet-config")
+    FileUtils.rm_f(fleet_config_path(repo))
+
+    assert_rejects(["sync", sync(repo), "fleet/repos inventory mismatch (missing: .github.yml)"])
+  end
+
+  def test_rejects_orphaned_hub_fleet_config
+    repo = scenario("orphaned-hub-fleet-config")
+    FileUtils.cp(fleet_config_path(repo), File.join(repo, "fleet/repos/orphaned.yml"))
+
+    assert_rejects(["sync", sync(repo), "fleet/repos inventory mismatch (orphaned: orphaned.yml)"])
+  end
+
+  def test_requires_repo_name
+    repo = scenario("missing-repo-name")
+    result = run_command(repo, *SYNC, "--hub-root", ".", "--repo-root", ".")
+
+    assert_rejects(["sync", result, "--repo-name is required"])
+  end
+
+  def test_rejects_unknown_fleet_config_key
+    repo = scenario("unknown-fleet-config-key")
+    config = fleet_config(repo)
+    config["unexpected"] = true
+    write_fleet_config(repo, config)
+
+    assert_rejects(["sync", sync(repo), ".fleet.yml contains unknown keys: unexpected"])
+  end
+
   def test_renders_dependabot_entry_policies
     repo = scenario("dependabot-entry-policies")
     config = fleet_config(repo)
@@ -279,7 +371,7 @@ class GuardRegressionsTest < Minitest::Test
         "UNICODE_LINE_BREAK_TEST",
         %("First line\\nSecond\\u#{line_break.ord.to_s(16)}hidden")
       )
-      File.write(File.join(repo, ".fleet.yml"), yaml)
+      File.write(fleet_config_path(repo), yaml)
 
       assert_rejects(
         ["sync", sync(repo), ".text must not contain control characters or line separators"]
@@ -437,37 +529,53 @@ class GuardRegressionsTest < Minitest::Test
   def test_rejects_malformed_base_config_before_declassification_check
     repo = scenario("malformed-base-config-declassification")
     config = fleet_config(repo)
-    File.write(File.join(repo, ".fleet.yml"), "schema: [\n")
+    File.write(rendered_fleet_config_path(repo), "schema: [\n")
     commit_all(repo, "malformed base fleet config")
 
     head_config = config.merge("exceptions" => config.fetch("exceptions", {}).merge(
       "pinprick-audit" => "consumer opt-out"
     ))
-    write_fleet_config(repo, head_config)
+    write_rendered_fleet_config(repo, head_config)
     commit_all(repo, "declassify pinprick audit")
 
     assert_rejects(["guard", consumer_guard(repo), "fleet guard: base .fleet.yml could not be parsed"])
   end
 
-  def test_allows_absent_base_config_for_fleet_adoption
+  def test_rejects_consumer_adoption_when_base_config_is_absent
     repo = scenario("absent-base-config-adoption")
     config = fleet_config(repo)
-    FileUtils.rm_f(File.join(repo, ".fleet.yml"))
+    FileUtils.rm_f(rendered_fleet_config_path(repo))
     commit_all(repo, "remove fleet config at base")
 
-    write_fleet_config(repo, config)
+    write_rendered_fleet_config(repo, config)
     commit_all(repo, "adopt fleet config")
 
-    assert_sync_success(consumer_guard(repo))
+    assert_rejects(["guard", consumer_guard(repo), ".fleet.yml is hub-owned fleet configuration"])
+  end
+
+  def test_rejects_guard_repo_name_mismatch
+    repo = scenario("guard-repo-name-mismatch")
+    result = run_command_env(
+      { "GITHUB_REPOSITORY" => "starhaven-io/pinprick" },
+      repo,
+      *SYNC,
+      "--hub-root", ".",
+      "--repo-root", ".",
+      "--repo-name", ".github",
+      "--guard", "HEAD~1"
+    )
+
+    assert_rejects(["guard", result, "--repo-name .github does not match guard repository starhaven-io/pinprick"])
   end
 
   def test_rejects_consumer_fleet_config_weakening_with_matching_render
     repo = scenario("consumer-config-weakening")
+    canonical = File.read(fleet_config_path(repo))
     config = fleet_config(repo)
     config.fetch("params").fetch("pinprick-audit")["fail-on-findings"] = false
     write_fleet_config(repo, config)
     assert_sync_success(sync(repo))
-    assert_sync_success(sync(repo, "--check"))
+    File.write(fleet_config_path(repo), canonical)
     commit_all(repo, "weaken fleet config")
 
     assert_rejects(["guard", consumer_guard(repo), ".fleet.yml is hub-owned fleet configuration"])
@@ -477,7 +585,7 @@ class GuardRegressionsTest < Minitest::Test
     repo = scenario("consumer-config-edit")
     config = fleet_config(repo)
     config.fetch("params").fetch("pinprick-audit")["fail-on-findings"] = false
-    write_fleet_config(repo, config)
+    write_rendered_fleet_config(repo, config)
     commit_all(repo, "edit fleet config")
 
     assert_rejects(["guard", consumer_guard(repo), ".fleet.yml is hub-owned fleet configuration"])

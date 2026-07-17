@@ -1,0 +1,46 @@
+schema: 1
+license: "agpl"
+params:
+  astro-docs: true
+  dependabot:
+    - package-ecosystem: "github-actions"
+      group: "github-actions"
+      directory: "/"
+    - package-ecosystem: "npm"
+      group: "npm-dependencies"
+      directory: "/"
+  link-check:
+    targets: "--config lychee.toml --root-dir dist/client './dist/client/**/*.html' README.md"
+    build-site: true
+    authenticated-github: false
+    schedule: "0 14 * * 1"
+    concurrency-group: "link-check"
+  codeql:
+    languages: ["actions", "javascript-typescript"]
+    paths:
+      - "src/**"
+      - "public/**"
+      - ".github/workflows/**"
+      - "astro.config.mjs"
+      - "package-lock.json"
+      - "package.json"
+      - "tsconfig.json"
+      - "wrangler.jsonc"
+    runner: "ubuntu-24.04"
+    timeout-minutes: 30
+  pinprick-audit:
+    advanced-security: "${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}"
+    fail-on-findings: true
+  readme:
+    badges:
+      workflow: "ci.yml"
+      extra:
+        - "[![Prose: CC-BY-SA-4.0](https://img.shields.io/badge/Prose-CC--BY--SA--4.0-green.svg)](https://creativecommons.org/licenses/by-sa/4.0/)"
+    license:
+      text: |-
+        This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`).
+
+        Prose (blog posts and site copy) is licensed separately under [CC-BY-SA-4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+
+        Copyright (C) 2026 Patrick Linnane
+exceptions: {}
