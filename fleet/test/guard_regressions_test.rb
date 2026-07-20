@@ -145,6 +145,17 @@ module GuardHelpers
     FileUtils.mv(path, target)
     File.symlink(target_relative_path.split("/").last, path)
   end
+
+  def enable_npm_policy(repo, projects)
+    config = fleet_config(repo)
+    config.fetch("params")["npm-policy"] = { "projects" => projects }
+    write_fleet_config(repo, config)
+    File.open(File.join(repo, "justfile"), "a") do |file|
+      file.puts
+      file.puts("# fleet:block npm-policy")
+      file.puts("# fleet:end")
+    end
+  end
 end
 
 TMPDIR = Dir.mktmpdir("fleet-guard-regressions-")
@@ -787,6 +798,44 @@ class GuardRegressionsTest < Minitest::Test
       ["guard", guard(repo), "managed surface change rejected"],
       ["--check", sync(repo, "--check"), "fleet sync drift detected"]
     )
+  end
+
+  def test_renders_npm_policy_surfaces
+    repo = scenario("npm-policy-render")
+    enable_npm_policy(repo, [".", "site"])
+
+    assert_sync_success(sync(repo))
+
+    checker = File.join(repo, "scripts/check-npm-install-policy.mjs")
+    assert_equal File.read(File.join(repo, "fleet/files/check-npm-install-policy.mjs")), File.read(checker)
+    assert_includes File.read(File.join(repo, "justfile")),
+                    "node scripts/check-npm-install-policy.mjs . site"
+    assert_sync_success(sync(repo, "--check"))
+  end
+
+  def test_rejects_npm_policy_recipe_edit
+    repo = scenario("npm-policy-recipe-edit")
+    enable_npm_policy(repo, ["site"])
+    assert_sync_success(sync(repo))
+    commit_all(repo, "adopt npm-policy surfaces")
+
+    path = File.join(repo, "justfile")
+    File.write(path, File.read(path).sub(
+                       "node scripts/check-npm-install-policy.mjs site",
+                       "node scripts/check-npm-install-policy.mjs site --allow-everything"
+                     ))
+    commit_all(repo, "edit npm-policy recipe")
+
+    assert_rejects(["guard", guard(repo), "fleet guard: managed surface change rejected"])
+  end
+
+  def test_rejects_npm_policy_projects_without_projects_key
+    repo = scenario("npm-policy-missing-projects")
+    config = fleet_config(repo)
+    config.fetch("params")["npm-policy"] = { "dirs" => ["site"] }
+    write_fleet_config(repo, config)
+
+    assert_rejects(["sync", sync(repo), ".fleet.yml params.npm-policy contains unknown keys: dirs"])
   end
 
   def test_rejects_broken_symlink_whole_files

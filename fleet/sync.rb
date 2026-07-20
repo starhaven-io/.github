@@ -70,10 +70,13 @@ class FleetSync
     codeql-languages
     dependabot
     link-check
+    npm-policy
     pinprick-audit
     readme
     zizmor
   ].freeze
+
+  NPM_POLICY_PROJECT_PATTERN = %r{\A[A-Za-z0-9._][A-Za-z0-9._/-]*\z}
 
   EXCEPTION_KEYS = %w[
     audit
@@ -266,6 +269,7 @@ class FleetSync
     reject_unknown_keys(params, PARAM_KEYS, ".fleet.yml params")
     validate_boolean(params, "astro-docs", ".fleet.yml params.astro-docs")
     validate_dependabot(params["dependabot"]) if params.key?("dependabot")
+    validate_npm_policy(params["npm-policy"]) if params.key?("npm-policy")
     validate_link_check(params["link-check"]) if params.key?("link-check")
     validate_codeql(params["codeql"]) if params.key?("codeql")
     validate_string_array(params, "codeql-languages", ".fleet.yml params.codeql-languages")
@@ -365,6 +369,24 @@ class FleetSync
     validate_plain_string(value["schedule"], "#{path}.schedule") if value.key?("schedule")
     validate_string_array(value, "pull-request-paths", "#{path}.pull-request-paths")
     validate_plain_string(value["concurrency-group"], "#{path}.concurrency-group") if value.key?("concurrency-group")
+  end
+
+  def validate_npm_policy(value)
+    path = ".fleet.yml params.npm-policy"
+    raise FleetError, "#{path} must be a mapping" unless value.is_a?(Hash)
+
+    reject_unknown_keys(value, %w[projects], path)
+    projects = value["projects"]
+    raise FleetError, "#{path}.projects must be an array" unless projects.is_a?(Array)
+    raise FleetError, "#{path}.projects must not be empty" if projects.empty?
+
+    projects.each_with_index do |project, index|
+      entry_path = "#{path}.projects[#{index}]"
+      validate_plain_string(project, entry_path)
+      next if project.match?(NPM_POLICY_PROJECT_PATTERN)
+
+      raise FleetError, "#{entry_path} must be a relative project directory"
+    end
   end
 
   def validate_codeql(value)
@@ -554,6 +576,14 @@ class FleetSync
     params = config_params(config)
     write_file(".mcp.json", read_path(hub_path("files/mcp.json")), ".mcp.json") if params["astro-docs"]
 
+    if params["npm-policy"]
+      write_file(
+        "scripts/check-npm-install-policy.mjs",
+        read_path(hub_path("files/check-npm-install-policy.mjs")),
+        "scripts/check-npm-install-policy.mjs"
+      )
+    end
+
     EXECUTABLE_PATHS.each do |path|
       chmod_executable(path)
     end
@@ -581,6 +611,12 @@ class FleetSync
     )
 
     replace_just_recipe("install-hooks", read_path(hub_path("blocks/install-hooks.just")))
+    if params["npm-policy"]
+      replace_just_recipe(
+        "npm-policy",
+        render_template("npm-policy.just.erb", projects: params.fetch("npm-policy").fetch("projects"))
+      )
+    end
     replace_just_recipe("audit", read_path(hub_path("blocks/audit.just"))) unless exception?(config, "audit")
     unless exception?(config, "pinprick-audit-recipe")
       replace_just_recipe("pinprick-audit", read_path(hub_path("blocks/pinprick-audit.just")))
@@ -921,6 +957,7 @@ class FleetSync
     files = [".fleet.yml", *TIER1_FILES.keys]
     files << "LICENSE" unless config_license(config) == "none"
     files << ".mcp.json" if params["astro-docs"]
+    files << "scripts/check-npm-install-policy.mjs" if params["npm-policy"]
     files << ".github/workflows/fleet-guard.yml"
     files << ".github/dependabot.yml" if params["dependabot"]
     files << ".github/workflows/zizmor.yml" unless exception?(config, "zizmor")
@@ -937,6 +974,7 @@ class FleetSync
       { path: ".gitignore", name: "local-state", style: :hash },
       { path: "justfile", name: "install-hooks", style: :hash }
     ]
+    blocks << { path: "justfile", name: "npm-policy", style: :hash } if params["npm-policy"]
     blocks << { path: "justfile", name: "audit", style: :hash } unless exception?(config, "audit")
     blocks << { path: "justfile", name: "pinprick-audit", style: :hash } unless exception?(config,
                                                                                            "pinprick-audit-recipe")
