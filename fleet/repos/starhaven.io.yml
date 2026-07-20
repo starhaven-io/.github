@@ -13,6 +13,8 @@ params:
         - dependency-name: "typescript"
           reason: "TypeScript 7.0 lacks Astro's required API; reassess with 7.1: https://github.com/withastro/astro/issues/17268"
           versions: [">=7.0.0 <7.1.0"]
+  npm-policy:
+    projects: ["."]
   link-check:
     targets: "--config lychee.toml --root-dir dist/client './dist/client/**/*.html' README.md"
     build-site: true

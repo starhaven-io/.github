@@ -35,6 +35,7 @@ Tier 1:
 | `CLAUDE.md` | exactly `@AGENTS.md` |
 | `LICENSE` | one canonical file per license type in `fleet/files/licenses/` |
 | `.mcp.json` | astro-docs config; consumers with `astro-docs: true` |
+| `scripts/check-npm-install-policy.mjs` | deny-by-default install-script checker; consumers with `npm-policy` |
 
 Tier 2 (managed blocks):
 
@@ -43,6 +44,7 @@ Tier 2 (managed blocks):
 | `commit-and-pr-conventions` | `AGENTS.md` | all consumers; commit, PR, and comment discipline |
 | `local-state` | `.gitignore` | all consumers; the org-minimum header section |
 | `install-hooks` | `justfile` | all consumers |
+| `npm-policy` | `justfile` | consumers with `npm-policy`; parameterized by project directories |
 | `audit` | `justfile` | all workflow-owning consumers |
 | `pinprick-audit` | `justfile` | all consumers without a cited exception |
 | `badges` + `license-section` | `README.md` | public project repos, parameterized by repo name and badge workflow |
@@ -145,6 +147,24 @@ params:
           reason: "TypeScript 7.0 lacks Astro's required API; reassess with 7.1: https://github.com/withastro/astro/issues/17268"
           versions: [">=7.0.0 <7.1.0"]
 ```
+
+The `npm-policy` param opts a consumer into the deny-by-default install-script
+policy ahead of npm 12. It syncs `scripts/check-npm-install-policy.mjs` and
+renders the `npm-policy` justfile recipe, parameterized by the project
+directories the checker validates:
+
+```yaml
+params:
+  npm-policy:
+    projects: [".", "site", "trigger"]
+```
+
+The recipe renders into a repo-owned `# fleet:block npm-policy` fence in the
+`justfile`, so a consumer must carry that fence before it is enabled, the same
+as the other justfile blocks. The per-package `allowScripts` map in each
+`package.json`, the CI and deploy steps that run the checker before
+`npm ci --strict-allow-scripts`, and the `check` recipe's call stay repo-owned;
+the checker and its recipe are the shared surfaces.
 
 Exceptions are explicit and cited; a managed surface with an exception entry is
 left untouched by the renderer, so every variant is self-documenting:

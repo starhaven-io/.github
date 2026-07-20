@@ -1,0 +1,3 @@
+# Verify every dependency install script is denied or exactly approved
+npm-policy:
+    node scripts/check-npm-install-policy.mjs <%= projects.join(" ") %>
