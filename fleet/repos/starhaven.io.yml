@@ -13,6 +13,9 @@ params:
         - dependency-name: "typescript"
           reason: "TypeScript 7.0 lacks Astro's required API; reassess with 7.1: https://github.com/withastro/astro/issues/17268"
           versions: [">=7.0.0 <7.1.0"]
+        - dependency-name: "wrangler"
+          reason: "Wrangler 4.111.0 rejects the legacy_env field emitted by the Astro/Cloudflare adapter's generated config; reassess when the adapter fix is usable"
+          versions: [">=4.111.0"]
   npm-policy:
     projects: ["."]
   link-check:
