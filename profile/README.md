@@ -22,7 +22,7 @@ brew install starhaven-io/tap/macosdb
 
 ### [midden](https://github.com/starhaven-io/midden)
 
-A CLI that resolves, audits, and garbage-collects the state Claude Code accumulates. Surfaces what's actually active for a given directory with provenance, flags what's stale or leaking, and prunes `~/.claude.json` entries and ephemeral worktrees that nothing else cleans up.
+A CLI that resolves, audits, visualizes, and cleans the heap of context and state Codex and Claude Code accumulate. Surfaces what's actually active for a directory with provenance, flags what's stale or leaking, and prunes what nothing else cleans up.
 
 ```sh
 brew install starhaven-io/tap/midden
