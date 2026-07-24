@@ -8,6 +8,8 @@ require "minitest/autorun"
 
 ROOT = File.expand_path("../..", __dir__)
 SYNC = ["ruby", "-rpathname", "fleet/sync.rb"].freeze
+CONCLUSION_WORKFLOW = File.join(ROOT, ".github/workflows/conclusion.yml")
+PINPRICK_AUDIT_WORKFLOW = File.join(ROOT, ".github/workflows/pinprick-audit.yml")
 
 CommandResult = Struct.new(:stdout, :stderr, :status, keyword_init: true) do
   def output
@@ -849,5 +851,229 @@ class GuardRegressionsTest < Minitest::Test
       ["guard", guard(repo), "managed surface change rejected"],
       ["--check", sync(repo, "--check"), "fleet sync drift detected"]
     )
+  end
+end
+
+class ConclusionContractTest < Minitest::Test
+  include GuardHelpers
+
+  def setup
+    @workflow = YAML.safe_load_file(CONCLUSION_WORKFLOW, permitted_classes: [], aliases: false)
+    @jobs = @workflow.fetch("jobs")
+    @pinprick_audit = YAML.safe_load_file(PINPRICK_AUDIT_WORKFLOW, permitted_classes: [], aliases: false)
+  end
+
+  def test_every_pull_request_reports_exact_lowercase_conclusion
+    assert_equal({ "pull_request" => nil }, @workflow.fetch(true))
+    refute @jobs.fetch("changes").key?("if")
+
+    guard = @jobs.fetch("guard")
+    refute guard.key?("if")
+    assert_includes guard.fetch("uses"), "/.github/workflows/reusable-fleet-guard.yml@"
+
+    conclusion = @jobs.fetch("conclusion")
+    assert_equal "conclusion", conclusion.fetch("name")
+    assert_equal "${{ always() }}", conclusion.fetch("if")
+    assert_equal %w[changes guard fleet audit], conclusion.fetch("needs")
+  end
+
+  def test_docs_only_change_intentionally_skips_conditional_work
+    assert_equal({ "audit" => "false", "fleet" => "false" }, classify("SECURITY.md"))
+
+    assert_conclusion_success(
+      "AUDIT_REQUIRED" => "false",
+      "AUDIT_RESULT" => "skipped",
+      "FLEET_REQUIRED" => "false",
+      "FLEET_RESULT" => "skipped"
+    )
+  end
+
+  def test_guard_failure_fails_conclusion
+    assert_conclusion_failure("GUARD_RESULT" => "failure")
+  end
+
+  def test_change_classification_fails_closed_on_unknown_revision
+    output_path = File.join(TMPDIR, "unknown-revision-output")
+    result = run_command_env(
+      {
+        "BASE_SHA" => "missing-base",
+        "GITHUB_OUTPUT" => output_path,
+        "HEAD_SHA" => "missing-head",
+        "RUNNER_TEMP" => TMPDIR
+      },
+      ROOT,
+      "bash",
+      "-euo",
+      "pipefail",
+      "-c",
+      workflow_script("changes", "Classify changed paths")
+    )
+
+    refute result.success?, "expected change classification to fail on unknown revisions"
+  end
+
+  def test_change_classification_ignores_base_only_changes
+    repo = Dir.mktmpdir("conclusion-diverged-", TMPDIR)
+    git(repo, "init", "-q")
+    File.write(File.join(repo, "baseline"), "baseline\n")
+    commit_all(repo, "baseline")
+    branch_point = git(repo, "rev-parse", "HEAD").stdout.strip
+
+    git(repo, "checkout", "-q", "-b", "pull-request")
+    File.write(File.join(repo, "SECURITY.md"), "pull request\n")
+    commit_all(repo, "pull request")
+    head_sha = git(repo, "rev-parse", "HEAD").stdout.strip
+
+    git(repo, "checkout", "-q", "-b", "updated-base", branch_point)
+    workflow = File.join(repo, ".github/workflows/base-only.yml")
+    FileUtils.mkdir_p(File.dirname(workflow))
+    File.write(workflow, "name: Base only\n")
+    commit_all(repo, "base-only workflow")
+    base_sha = git(repo, "rev-parse", "HEAD").stdout.strip
+
+    assert_equal(
+      { "audit" => "false", "fleet" => "false" },
+      classify_revisions(repo, base_sha, head_sha)
+    )
+  end
+
+  def test_fleet_change_requires_validation_and_propagates_failure
+    assert_equal(
+      { "audit" => "false", "fleet" => "true" },
+      classify("fleet/templates/fleet-guard.yml.erb")
+    )
+    assert_equal "needs.changes.outputs.fleet == 'true'", @jobs.fetch("fleet").fetch("if")
+    assert_equal "./.github/workflows/fleet-validate.yml", @jobs.fetch("fleet").fetch("uses")
+
+    assert_conclusion_failure(
+      "FLEET_REQUIRED" => "true",
+      "FLEET_RESULT" => "failure"
+    )
+  end
+
+  def test_workflow_audit_gates_without_duplicating_the_sarif_upload
+    assert_equal(
+      { "audit" => "true", "fleet" => "true" },
+      classify(".github/workflows/reusable-fleet-guard.yml")
+    )
+    assert_equal(
+      { "audit" => "true", "fleet" => "true" },
+      classify(".github/workflows/pinprick-audit.yml")
+    )
+    assert_equal "false", classify("SECURITY.md").fetch("audit")
+
+    audit = @jobs.fetch("audit")
+    assert_equal "needs.changes.outputs.audit == 'true'", audit.fetch("if")
+    assert_includes(
+      audit.fetch("uses"),
+      "/.github/workflows/reusable-pinprick-audit.yml@"
+    )
+    assert_equal({ "contents" => "read" }, audit.fetch("permissions"))
+    assert_equal false, audit.fetch("with").fetch("advanced-security")
+    assert_equal true, audit.fetch("with").fetch("fail-on-findings")
+    assert_equal(
+      [".github/workflows/**"],
+      @pinprick_audit.fetch(true).fetch("pull_request").fetch("paths")
+    )
+
+    assert_conclusion_success(
+      "AUDIT_REQUIRED" => "true",
+      "AUDIT_RESULT" => "success"
+    )
+    assert_conclusion_failure(
+      "AUDIT_REQUIRED" => "true",
+      "AUDIT_RESULT" => "failure"
+    )
+  end
+
+  def test_cancelled_or_unexpectedly_skipped_required_work_fails_conclusion
+    [
+      { "CHANGES_RESULT" => "failure" },
+      { "CHANGES_RESULT" => "cancelled" },
+      { "CHANGES_RESULT" => "skipped" },
+      { "GUARD_RESULT" => "cancelled" },
+      { "GUARD_RESULT" => "skipped" },
+      { "FLEET_REQUIRED" => "true", "FLEET_RESULT" => "cancelled" },
+      { "FLEET_REQUIRED" => "true", "FLEET_RESULT" => "skipped" },
+      { "AUDIT_REQUIRED" => "true", "AUDIT_RESULT" => "cancelled" },
+      { "AUDIT_REQUIRED" => "true", "AUDIT_RESULT" => "skipped" }
+    ].each do |overrides|
+      assert_conclusion_failure(overrides)
+    end
+  end
+
+  private
+
+  def classify(path)
+    repo = Dir.mktmpdir("conclusion-classify-", TMPDIR)
+    git(repo, "init", "-q")
+    File.write(File.join(repo, "baseline"), "baseline\n")
+    commit_all(repo, "baseline")
+    base_sha = git(repo, "rev-parse", "HEAD").stdout.strip
+
+    changed_path = File.join(repo, path)
+    FileUtils.mkdir_p(File.dirname(changed_path))
+    File.write(changed_path, "changed\n")
+    commit_all(repo, "change #{path}")
+    head_sha = git(repo, "rev-parse", "HEAD").stdout.strip
+
+    classify_revisions(repo, base_sha, head_sha)
+  end
+
+  def classify_revisions(repo, base_sha, head_sha)
+    output_path = File.join(repo, "github-output")
+    result = run_command_env(
+      {
+        "BASE_SHA" => base_sha,
+        "GITHUB_OUTPUT" => output_path,
+        "HEAD_SHA" => head_sha,
+        "RUNNER_TEMP" => repo
+      },
+      repo,
+      "bash",
+      "-euo",
+      "pipefail",
+      "-c",
+      workflow_script("changes", "Classify changed paths")
+    )
+    assert result.success?, result.output
+
+    File.readlines(output_path, chomp: true).to_h { |line| line.split("=", 2) }
+  end
+
+  def assert_conclusion_success(overrides = {})
+    result = run_conclusion(overrides)
+
+    assert result.success?, result.output
+  end
+
+  def assert_conclusion_failure(overrides)
+    result = run_conclusion(overrides)
+
+    refute result.success?, "expected conclusion failure for #{overrides.inspect}"
+  end
+
+  def run_conclusion(overrides)
+    defaults = {
+      "AUDIT_REQUIRED" => "false",
+      "AUDIT_RESULT" => "skipped",
+      "CHANGES_RESULT" => "success",
+      "FLEET_REQUIRED" => "false",
+      "FLEET_RESULT" => "skipped",
+      "GUARD_RESULT" => "success"
+    }
+    run_command_env(
+      defaults.merge(overrides),
+      ROOT,
+      "bash",
+      "-euo",
+      "pipefail",
+      "-c",
+      workflow_script("conclusion", "Require merge-critical results")
+    )
+  end
+
+  def workflow_script(job, step_name)
+    @jobs.fetch(job).fetch("steps").find { |step| step["name"] == step_name }.fetch("run")
   end
 end
