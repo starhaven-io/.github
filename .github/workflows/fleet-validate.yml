@@ -1,23 +1,13 @@
 name: Fleet Validate
 
 on:
-  pull_request:
-    paths:
-      - "fleet/**"
-      - ".github/workflows/reusable-*.yml"
-      - ".github/workflows/fleet-release.yml"
-      - ".github/workflows/fleet-sync.yml"
-      - ".github/workflows/fleet-validate.yml"
+  workflow_call:
 
 permissions: {}
 
 defaults:
   run:
     shell: bash -euo pipefail {0}
-
-concurrency:
-  group: "fleet-validate-${{ github.ref }}"
-  cancel-in-progress: true
 
 jobs:
   prepare:

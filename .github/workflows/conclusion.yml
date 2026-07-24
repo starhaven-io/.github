@@ -1,0 +1,156 @@
+name: PR Conclusion
+
+on:
+  pull_request:
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+concurrency:
+  group: "conclusion-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Classify changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      audit: ${{ steps.paths.outputs.audit }}
+      fleet: ${{ steps.paths.outputs.fleet }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify changed paths
+        id: paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          : "${BASE_SHA:?pull request base SHA is required}"
+          : "${HEAD_SHA:?pull request head SHA is required}"
+
+          audit=false
+          fleet=false
+          changed_paths="${RUNNER_TEMP}/conclusion-changed-paths"
+          git diff --name-only --no-renames --diff-filter=ACDMRT -z \
+            "${BASE_SHA}...${HEAD_SHA}" > "${changed_paths}"
+          while IFS= read -r -d '' path; do
+            case "${path}" in
+              fleet/* | \
+              .github/workflows/conclusion.yml | \
+              .github/workflows/fleet-release.yml | \
+              .github/workflows/fleet-sync.yml | \
+              .github/workflows/fleet-validate.yml | \
+              .github/workflows/pinprick-audit.yml | \
+              .github/workflows/reusable-*.yml | \
+              .github/workflows/reusable-*.yaml)
+                fleet=true
+                ;;
+            esac
+
+            case "${path}" in
+              .github/workflows/*)
+                audit=true
+                ;;
+            esac
+          done < "${changed_paths}"
+
+          {
+            echo "audit=${audit}"
+            echo "fleet=${fleet}"
+          } >> "${GITHUB_OUTPUT}"
+
+  guard:
+    name: Fleet guard
+    permissions:
+      contents: read
+    uses: starhaven-io/.github/.github/workflows/reusable-fleet-guard.yml@ca53feb55a6153eb56aec343972368432fdbc5c3 # v2026.07.20.1
+    with:
+      repo-name: ${{ github.event.repository.name }}
+
+  fleet:
+    name: Fleet validate
+    needs: changes
+    if: needs.changes.outputs.fleet == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/fleet-validate.yml
+
+  audit:
+    name: Workflow audit
+    needs: changes
+    if: needs.changes.outputs.audit == 'true'
+    permissions:
+      contents: read
+    uses: starhaven-io/.github/.github/workflows/reusable-pinprick-audit.yml@ca53feb55a6153eb56aec343972368432fdbc5c3 # v2026.07.20.1
+    with:
+      advanced-security: false
+      fail-on-findings: true
+
+  conclusion:
+    name: conclusion
+    needs:
+      - changes
+      - guard
+      - fleet
+      - audit
+    if: ${{ always() }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - name: Require merge-critical results
+        env:
+          AUDIT_REQUIRED: ${{ needs.changes.outputs.audit }}
+          AUDIT_RESULT: ${{ needs.audit.result }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          FLEET_REQUIRED: ${{ needs.changes.outputs.fleet }}
+          FLEET_RESULT: ${{ needs.fleet.result }}
+          GUARD_RESULT: ${{ needs.guard.result }}
+        run: |
+          failed=0
+
+          require_success() {
+            local label="$1"
+            local result="$2"
+            if [[ "${result}" != "success" ]]; then
+              echo "::error::${label} ended with ${result:-no result}"
+              failed=1
+            fi
+          }
+
+          require_conditional() {
+            local label="$1"
+            local required="$2"
+            local result="$3"
+            case "${required}" in
+              true)
+                require_success "${label}" "${result}"
+                ;;
+              false)
+                if [[ "${result}" != "skipped" ]]; then
+                  echo "::error::${label} was irrelevant but ended with ${result:-no result} instead of skipped"
+                  failed=1
+                fi
+                ;;
+              *)
+                echo "::error::${label} requirement could not be determined"
+                failed=1
+                ;;
+            esac
+          }
+
+          require_success "change classification" "${CHANGES_RESULT}"
+          require_success "fleet guard" "${GUARD_RESULT}"
+          require_conditional "fleet validation" "${FLEET_REQUIRED}" "${FLEET_RESULT}"
+          require_conditional "workflow audit" "${AUDIT_REQUIRED}" "${AUDIT_RESULT}"
+
+          exit "${failed}"
