@@ -201,11 +201,12 @@ surface where it executes. The shared job bodies live in this hub:
 ## Versions, Pins, and Releases
 
 Fleet releases are tagged with CalVer: `vYYYY.MM.DD.N`, N starting at 1 each
-Pacific day, cut whenever `fleet/**` or a reusable workflow changes behavior.
-The canon is a dated cut, not an API, so compatibility-semantic versions carry
-no information here. Every tag carries all four segments: Dependabot cannot
-compare mixed-arity versions, so a bare day tag strands pins (tags from
-2026-07-05 predate this rule and stay as they are).
+Pacific day, cut whenever `fleet/**`, a reusable workflow, or the shared
+`renovate-config.json` preset changes behavior. The canon is a dated cut, not an
+API, so compatibility-semantic versions carry no information here. Every tag
+carries all four segments: Dependabot cannot compare mixed-arity versions, so a
+bare day tag strands pins (tags from 2026-07-05 predate this rule and stay as
+they are).
 
 Consumer callers pin reusable workflows by hub commit SHA with a fleet version
 comment. The sync is the only writer for fleet pins: every render seeds every
@@ -214,6 +215,11 @@ the release push itself, which then receives the tag), so each release is one
 PR per consumer carrying canon changes and pin movement together. Dependabot
 ignores `starhaven-io/.github` refs entirely and owns third-party dependencies
 only.
+
+Renovate consumers explicitly pin the shared preset by immutable fleet release
+tag. The `midden` pilot owns its initial stub locally; before a second adopter,
+the renderer must make `renovate.json` a tier-3 surface and become the sole
+writer for subsequent preset-pin movement.
 
 This hub is the seven-day supply-chain quarantine for everything first-party.
 Consumer Dependabot keeps its cooldown for third-party actions and never
@@ -224,7 +230,9 @@ release PR that bumps `fleet/VERSION` to the next Pacific CalVer tag name. The
 merge to `main` creates an annotated tag for that exact version if it does not
 already exist. Existing tags are never moved. Every VERSION bump is tagged on
 its merge commit; a sync run that cannot resolve the VERSION tag is the release
-push itself.
+push itself. A root `renovate-config.json` change does not trigger fleet sync;
+after it merges, a maintainer must dispatch the release workflow before any
+consumer preset pin moves.
 
 ## Sync Workflow
 
