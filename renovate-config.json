@@ -1,0 +1,74 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Starhaven tool pins that are outside Dependabot-managed ecosystems.",
+  "extends": [
+    ":gitSignOff"
+  ],
+  "ignorePresets": [
+    "mergeConfidence:all-badges"
+  ],
+  "enabledManagers": [
+    "rust-toolchain",
+    "custom.regex"
+  ],
+  "automerge": false,
+  "platformCommit": "enabled",
+  "minimumReleaseAge": "7 days",
+  "minimumReleaseAgeBehaviour": "timestamp-required",
+  "internalChecksFilter": "strict",
+  "semanticCommits": "enabled",
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
+  "prBodyColumns": [
+    "Package",
+    "Update",
+    "Change",
+    "Pending"
+  ],
+  "prBodyTemplate": "{{{table}}}{{{warnings}}}{{{controls}}}",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update cargo-installed tools pinned in GitHub Actions workflows.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "cargo install (?<depName>[A-Za-z0-9_-]+) --locked --version (?<currentValue>\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?)\\s"
+      ],
+      "datasourceTemplate": "crate",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Update Vale's release tag and matching archive SHA-256 together.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "(?<indentation>[ \\t]*)VALE_SHA256:\\s*\"(?<currentDigest>[a-f0-9]{64})\"[\\r\\n]+[ \\t]*VALE_VERSION:\\s*\"(?<version>\\d+(?:\\.\\d+){2})\""
+      ],
+      "currentValueTemplate": "v{{{version}}}",
+      "depNameTemplate": "Vale",
+      "packageNameTemplate": "vale-cli/vale",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver",
+      "autoReplaceStringTemplate": "{{{indentation}}}VALE_SHA256: \"{{{newDigest}}}\"\n{{{indentation}}}VALE_VERSION: \"{{{replace '^v' '' newValue}}}\""
+    },
+    {
+      "customType": "regex",
+      "description": "Update OpenTofu versions pinned in GitHub Actions workflows.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "TOFU_VERSION:\\s*\"(?<currentValue>\\d+(?:\\.\\d+){2})\""
+      ],
+      "depNameTemplate": "OpenTofu",
+      "packageNameTemplate": "opentofu/opentofu",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    }
+  ]
+}
