@@ -74,39 +74,31 @@ consumers only through reviewed pin changes. Two consequences:
   stub in a disposable checkout because Renovate's local platform cannot resolve
   `local>` presets.
 
-The current rollout is a single-consumer pilot on `midden`. Its local scaffold
-uses `REPLACE_WITH_FLEET_RELEASE` so it fails closed until the first tag
-containing this preset exists; replace that marker with the exact tag before
-merging the consumer change. The following command must exit successfully from
-the consumer root:
+Consumers opt in through `params.renovate: true` in their
+`fleet/repos/<name>.yml`; the renderer then owns the root `renovate.json` as a
+tier-3 file and pins the preset to the current immutable fleet release. For
+Renovate-enabled consumers, the publishing sync waits up to three minutes for
+that release tag to resolve before it can open a consumer PR. The consumer-level
+`ignorePresets` entry is the load-bearing opt-out from the Mend-hosted Merge
+Confidence preset; retain it in the rendered stub.
 
-```bash
-! grep -q 'REPLACE_WITH_FLEET_RELEASE' renovate.json
-```
+Install the hosted Mend app with **Only select repositories** and expand its
+repository selection one adopter at a time, only after that repository's
+fleet-rendered config reaches `main`. The public preset repository does not need
+the app installed. A repository that already automates its own tool-pin bumps
+keeps that automation until Renovate parity is proven; retiring it is a separate
+change, not part of adoption.
 
-The configuration validator checks syntax but does not resolve the preset ref,
-so it cannot enforce this gate. Install the hosted Mend app with **Only select
-repositories** and select only `midden` after its pinned config reaches `main`.
-The public preset repository does not need the app installed. Expand the app's
-repository selection one adopter at a time.
+`dependencyDashboard` is off. With `internalChecksFilter` set to `strict`, fully
+suppressed updates are visible only in Mend's run log; eligible PRs retain the
+`Pending` column and rebase/retry controls.
 
-Before a second repository adopts the preset, make the consumer stub a
-fleet-rendered file rather than a hand-copied one. Dependabot config is already
-fleet-rendered, and two hand-maintained copies of the same policy will drift.
-The consumer-level `ignorePresets` entry is the load-bearing opt-out from the
-Mend-hosted Merge Confidence preset; retain it in the rendered stub.
-
-The pilot deliberately leaves `dependencyDashboard` off. With
-`internalChecksFilter` set to `strict`, fully suppressed updates are visible
-only in Mend's run log; eligible PRs retain the `Pending` column and
-rebase/retry controls. Revisit the dashboard tradeoff after the pilot.
-
-On the first hosted PR, manually confirm that the `Signed-off-by` trailer is
-present and non-empty, its identity matches the commit author, and GitHub marks
-the commit `Verified`. No estate check currently enforces that identity match.
-Keep cargo workflow pins in the canonical single-spaced form `cargo install
-<tool> --locked --version <version>` so the deliberately narrow regex manager
-can see them.
+On an adopter's first hosted PR, manually confirm that the `Signed-off-by`
+trailer is present and non-empty, its identity matches the commit author, and
+GitHub marks the commit `Verified`. No estate check currently enforces that
+identity match. Keep cargo workflow pins in the canonical single-spaced form
+`cargo install <tool> --locked --version <version>` so the deliberately narrow
+regex manager can see them.
 
 ## Safety / do-not-touch rules
 

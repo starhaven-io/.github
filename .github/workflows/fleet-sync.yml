@@ -56,7 +56,19 @@ jobs:
             selected = ENV.fetch("SELECTED_REPO", "")
             repos = repos.select { |repo| repo == selected } unless selected.empty?
             abort("unknown fleet repo: #{selected}") if repos.empty? && !selected.empty?
-            matrix = { include: repos.map { |repo| { repo: repo } } }
+            matrix = {
+              include: repos.map do |repo|
+                config = YAML.safe_load(
+                  File.read("fleet/repos/#{repo}.yml"),
+                  permitted_classes: [],
+                  aliases: false
+                )
+                {
+                  repo: repo,
+                  release_tag_required: config.dig("params", "renovate") == true
+                }
+              end
+            }
             File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |file| file.puts("matrix=#{JSON.generate(matrix)}") }
           '
 
@@ -86,6 +98,23 @@ jobs:
         uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
           working-directory: hub/fleet
+
+      - name: Wait for fleet release tag
+        if: ${{ matrix.release_tag_required }}
+        run: |
+          FLEET_VERSION="$(cat hub/fleet/VERSION)"
+          for ATTEMPT in {1..36}; do
+            if git -C hub rev-parse --verify --quiet "refs/tags/${FLEET_VERSION}^{commit}" >/dev/null; then
+              exit 0
+            fi
+            git -C hub fetch --quiet origin "refs/tags/${FLEET_VERSION}:refs/tags/${FLEET_VERSION}" || true
+            if git -C hub rev-parse --verify --quiet "refs/tags/${FLEET_VERSION}^{commit}" >/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Fleet release tag ${FLEET_VERSION} was not available after 180 seconds"
+          exit 1
 
       - name: Mint read token
         id: read-token

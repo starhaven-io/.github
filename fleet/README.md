@@ -55,6 +55,7 @@ Tier 3 (rendered files and thin callers):
 |------|-----------|------------|
 | `.fleet.yml` | rendered copy of `fleet/repos/<name>.yml` | complete effective fleet config, kept consumer-side for discoverability and guard base-state classification |
 | `.github/dependabot.yml` | rendered file | ecosystems, directories, and dependency policies |
+| `renovate.json` | rendered file | explicit shared-preset reference pinned to the current immutable fleet release; consumers with `renovate: true` |
 | `.github/workflows/zizmor.yml` | caller of `reusable-zizmor.yml` | extra push paths, schedule, timeout; defaults render the canonical shape |
 | `.github/workflows/pinprick-audit.yml` | caller of `reusable-pinprick-audit.yml` | `advanced-security` (false also drops the `security-events` grant), `fail-on-findings`, timeout |
 | `.github/workflows/link-check.yml` | caller of `reusable-link-check.yml` | targets, `build-site`, site directory, schedule |
@@ -116,6 +117,7 @@ in the hub file and arrive through the fleet sync bot.
 schema: 1
 license: "agpl"
 params:
+  renovate: true
   codeql:
     languages: ["actions", "javascript-typescript"]
     paths: ["src/**", ".github/workflows/**"]
@@ -210,16 +212,19 @@ they are).
 
 Consumer callers pin reusable workflows by hub commit SHA with a fleet version
 comment. The sync is the only writer for fleet pins: every render seeds every
-caller at the current release tag (falling back to the sync push SHA only on
-the release push itself, which then receives the tag), so each release is one
-PR per consumer carrying canon changes and pin movement together. Dependabot
-ignores `starhaven-io/.github` refs entirely and owns third-party dependencies
-only.
+caller at the current release tag. During the release-push race, consumers
+without tag-bound rendered configuration can fall back to the sync push SHA;
+Renovate-enabled consumers wait for the tag instead. Each release is one PR per
+consumer carrying canon changes and pin movement together. Dependabot ignores
+`starhaven-io/.github` refs entirely and owns third-party dependencies only.
 
-Renovate consumers explicitly pin the shared preset by immutable fleet release
-tag. The `midden` pilot owns its initial stub locally; before a second adopter,
-the renderer must make `renovate.json` a tier-3 surface and become the sole
-writer for subsequent preset-pin movement.
+Renovate consumers opt in with `params.renovate: true`. The renderer is the sole
+writer for their root `renovate.json`, including the load-bearing Merge
+Confidence opt-out, and pins the shared preset by immutable fleet release tag.
+For Renovate-enabled consumers, the publishing sync waits up to three minutes
+for that tag to resolve before it renders consumer stubs. Ephemeral release-PR
+validation can therefore propose a new version without letting a publishing
+sync reference a tag that does not exist yet.
 
 This hub is the seven-day supply-chain quarantine for everything first-party.
 Consumer Dependabot keeps its cooldown for third-party actions and never
