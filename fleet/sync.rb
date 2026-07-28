@@ -73,6 +73,7 @@ class FleetSync
     npm-policy
     pinprick-audit
     readme
+    renovate
     zizmor
   ].freeze
 
@@ -276,6 +277,7 @@ class FleetSync
     validate_pinprick_audit(params["pinprick-audit"]) if params.key?("pinprick-audit")
     validate_zizmor(params["zizmor"]) if params.key?("zizmor")
     validate_readme(params["readme"]) if params.key?("readme")
+    validate_boolean(params, "renovate", ".fleet.yml params.renovate")
   end
 
   def validate_exceptions(exceptions)
@@ -659,6 +661,7 @@ class FleetSync
       )
     end
 
+    render_renovate if params["renovate"]
     render_zizmor(params.fetch("zizmor", {})) unless exception?(config, "zizmor")
     render_pinprick_audit(params.fetch("pinprick-audit", {}), config) unless exception?(config, "pinprick-audit")
     render_link_check(params.fetch("link-check")) if params["link-check"]
@@ -675,6 +678,14 @@ class FleetSync
         reusable_version: version
       ),
       ".github/workflows/fleet-guard.yml"
+    )
+  end
+
+  def render_renovate
+    write_file(
+      "renovate.json",
+      render_template("renovate.json.erb", fleet_version: fleet_version),
+      "renovate.json"
     )
   end
 
@@ -960,6 +971,7 @@ class FleetSync
     files << "scripts/check-npm-install-policy.mjs" if params["npm-policy"]
     files << ".github/workflows/fleet-guard.yml"
     files << ".github/dependabot.yml" if params["dependabot"]
+    files << "renovate.json" if params["renovate"]
     files << ".github/workflows/zizmor.yml" unless exception?(config, "zizmor")
     files << ".github/workflows/pinprick-audit.yml" unless exception?(config, "pinprick-audit")
     files << ".github/workflows/link-check.yml" if params["link-check"]

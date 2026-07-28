@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "fileutils"
+require "json"
 require "open3"
 require "tmpdir"
 require "yaml"
@@ -343,6 +344,56 @@ class GuardRegressionsTest < Minitest::Test
         { "dependency-name" => "actions/setup-node", "update-types" => ["version-update:semver-major"] }
       ],
       rendered_actions.fetch("ignore")
+    )
+  end
+
+  def test_renders_and_guards_renovate_config
+    repo = scenario("renovate-config-render")
+    config = fleet_config(repo)
+    config.fetch("params")["renovate"] = true
+    write_fleet_config(repo, config)
+
+    assert_sync_success(sync(repo))
+
+    path = File.join(repo, "renovate.json")
+    rendered = JSON.parse(File.read(path))
+    assert_equal(
+      ["local>starhaven-io/.github:renovate-config##{fleet_version(repo)}"],
+      rendered.fetch("extends")
+    )
+    assert_equal ["mergeConfidence:all-badges"], rendered.fetch("ignorePresets")
+    assert_sync_success(sync(repo, "--check"))
+
+    commit_all(repo, "adopt renovate config")
+    rendered["ignorePresets"] = []
+    File.write(path, "#{JSON.pretty_generate(rendered)}\n")
+    commit_all(repo, "edit renovate config")
+
+    assert_rejects(["guard", consumer_guard(repo), "fleet guard: managed surface change rejected"])
+  end
+
+  def test_rejects_invalid_renovate_param
+    repo = scenario("invalid-renovate-param")
+    config = fleet_config(repo)
+    config.fetch("params")["renovate"] = "true"
+    write_fleet_config(repo, config)
+
+    assert_rejects(["sync", sync(repo), ".fleet.yml params.renovate must be true or false"])
+  end
+
+  def test_release_pr_validation_can_render_proposed_renovate_tag
+    repo = scenario("renovate-config-proposed-release")
+    config = fleet_config(repo)
+    config.fetch("params")["renovate"] = true
+    write_fleet_config(repo, config)
+    File.write(File.join(repo, "fleet/VERSION"), "v2099.01.01.1\n")
+
+    assert_sync_success(sync(repo))
+
+    rendered = JSON.parse(File.read(File.join(repo, "renovate.json")))
+    assert_equal(
+      ["local>starhaven-io/.github:renovate-config#v2099.01.01.1"],
+      rendered.fetch("extends")
     )
   end
 
