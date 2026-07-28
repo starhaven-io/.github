@@ -1,6 +1,7 @@
 schema: 1
 license: "none"
 params:
+  renovate: true
   dependabot:
     - package-ecosystem: "github-actions"
       group: "github-actions"
