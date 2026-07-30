@@ -958,6 +958,43 @@ class GuardRegressionsTest < Minitest::Test
     assert_rejects(["sync", sync(repo), ".fleet.yml params.npm-policy contains unknown keys: dirs"])
   end
 
+  def test_adopt_appends_missing_fences_and_renders
+    repo = scenario("adopt-missing-fences")
+    agents = File.join(repo, "AGENTS.md")
+    File.write(agents, File.read(agents)
+      .sub(/^<!-- fleet:block commit-and-pr-conventions -->\n.*?^<!-- fleet:end -->\n/m, ""))
+    justfile = File.join(repo, "justfile")
+    File.write(justfile, File.read(justfile).sub(/^# fleet:block audit\n.*?^# fleet:end\n/m, ""))
+
+    assert_rejects(["sync", sync(repo), "AGENTS.md is missing fleet:block commit-and-pr-conventions"])
+
+    assert_sync_success(sync(repo, "--adopt"))
+    assert_sync_success(sync(repo, "--check"))
+    assert_includes File.read(justfile), "zizmor --persona auditor .github/workflows/"
+    assert_includes File.read(agents), "## Commit and PR conventions"
+  end
+
+  def test_adopt_leaves_mangled_fences_for_the_renderer
+    repo = scenario("adopt-mangled-fence")
+    agents = File.join(repo, "AGENTS.md")
+    File.write(agents, File.read(agents).sub("\n<!-- fleet:end -->", ""))
+
+    assert_rejects(
+      ["sync --adopt", sync(repo, "--adopt"), "AGENTS.md is missing fleet:block commit-and-pr-conventions"]
+    )
+    assert_equal 1, File.read(agents).scan(/^<!-- fleet:block commit-and-pr-conventions -->$/).length
+  end
+
+  def test_rejects_adopt_combined_with_check_or_guard
+    repo = scenario("adopt-with-check")
+    message = "--adopt cannot be combined with --check or --guard"
+
+    assert_rejects(
+      ["--adopt --check", sync(repo, "--adopt", "--check"), message],
+      ["--adopt --guard", sync(repo, "--adopt", "--guard", "HEAD", "--hub"), message]
+    )
+  end
+
   def test_rejects_broken_symlink_whole_files
     repo = scenario("broken-symlink-whole-file")
     workflow = File.join(repo, ".github/workflows/zizmor.yml")

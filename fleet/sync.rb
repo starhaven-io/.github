@@ -116,17 +116,20 @@ class FleetSync
 
   attr_reader :changes
 
-  def initialize(hub_root:, repo_root:, repo_name:, check:, guard_base:, hub: false)
+  def initialize(hub_root:, repo_root:, repo_name:, check:, guard_base:, hub: false, adopt: false)
     @hub_root = Pathname(hub_root).expand_path
     @repo_root = Pathname(repo_root).expand_path
     @repo_name = repo_name
     @check = check || !guard_base.nil?
     @guard_base = guard_base
     @hub = hub
+    @adopt = adopt
     @changes = []
   end
 
   def run
+    raise FleetError, "--adopt cannot be combined with --check or --guard" if @adopt && @check
+
     validate_guard_repository_identity
     config = load_config
     validate_config(config)
@@ -136,6 +139,7 @@ class FleetSync
 
     return run_guard(config) if @guard_base
 
+    adopt_missing_fences(config) if @adopt
     render_all(config)
     report_changes
     raise FleetError, "fleet sync drift detected" if @check && @changes.any?
@@ -1025,6 +1029,36 @@ class FleetSync
     end
   end
 
+  # Adoption requires every managed fence to pre-exist in its host file.
+  # --adopt appends the missing ones empty, so a first render can succeed
+  # without hand-inserting each fence. Host files are never created, and a
+  # start marker without its end marker is left alone for the renderer to
+  # reject rather than papered over with a second fence.
+  def adopt_missing_fences(config)
+    guard_managed_blocks(config).each do |block|
+      path = repo_path(block.fetch(:path))
+      next unless regular_file?(path)
+
+      name = block.fetch(:name)
+      style = block.fetch(:style)
+      text = read_path(path)
+      next if text.scan(block_start_marker(name, style)).any?
+
+      write_path(path, "#{text.chomp}\n\n#{empty_fence(name, style)}\n")
+    end
+  end
+
+  def empty_fence(block_name, style)
+    case style
+    when :markdown
+      "<!-- fleet:block #{block_name} -->\n<!-- fleet:end -->"
+    when :hash
+      "# fleet:block #{block_name}\n# fleet:end"
+    else
+      raise FleetError, "unknown marker style #{style}"
+    end
+  end
+
   # just identifies a recipe by name alone (`audit token:` and `audit:` are the
   # same recipe), so a managed recipe that shares a name with a repo-owned one
   # either breaks every `just` invocation outright or, under
@@ -1461,7 +1495,8 @@ options = {
   repo_name: nil,
   check: false,
   guard_base: nil,
-  hub: false
+  hub: false,
+  adopt: false
 }
 
 OptionParser.new do |parser|
@@ -1470,6 +1505,9 @@ OptionParser.new do |parser|
   parser.on("--repo-root PATH", "Consumer repository root") { |value| options[:repo_root] = value }
   parser.on("--repo-name NAME", "Consumer repository name") { |value| options[:repo_name] = value }
   parser.on("--check", "Report drift without writing") { options[:check] = true }
+  parser.on("--adopt", "Append missing fleet:block fences to existing host files before rendering") do
+    options[:adopt] = true
+  end
   parser.on("--hub", "Treat this repository as the canonical fleet hub") { options[:hub] = true }
   parser.on("--guard BASE_REF", "Reject unmanaged edits to fleet-managed surfaces") do |value|
     options[:guard_base] = value
