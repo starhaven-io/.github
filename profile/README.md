@@ -30,7 +30,7 @@ brew install starhaven-io/tap/midden
 
 ### [pinprick](https://github.com/starhaven-io/pinprick)
 
-Supply-chain security for GitHub Actions. Pins action references to full SHAs, checks for updates, and audits pinned actions for runtime fetch patterns that bypass pinning — `curl | sh`, unpinned `git clone`, `FROM :latest`, and more. SARIF output for GitHub code scanning, and a hosted catalog of audited actions at [pinprick.rs](https://pinprick.rs).
+Supply-chain security for GitHub Actions. Pins action references to full SHAs, checks for updates, and audits pinned actions for runtime fetch patterns that bypass pinning — `curl | sh`, unpinned `git clone`, `FROM :latest`, and more. SARIF output for GitHub code scanning, and a hosted catalog of audited actions at [pinprick.rs](https://pinprick.rs). [pinprick-action](https://github.com/starhaven-io/pinprick-action) runs the same audit as a GitHub Action.
 
 ```sh
 brew install starhaven-io/tap/pinprick

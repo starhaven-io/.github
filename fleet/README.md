@@ -187,6 +187,29 @@ consumer pull request cannot create or change `.fleet.yml`, even when the base
 branch has no copy; this keeps adoption on the same trusted path as later
 configuration changes.
 
+Every tier-2 fence must exist in its host file before the first render can
+succeed; the renderer fails on a missing fence rather than guessing where the
+block belongs. The consumer must carry, empty or populated:
+
+- `AGENTS.md`: `<!-- fleet:block commit-and-pr-conventions -->`
+- `.gitignore`: `# fleet:block local-state`
+- `justfile`: `# fleet:block install-hooks`, plus `# fleet:block npm-policy`
+  when `npm-policy` is configured, `# fleet:block audit` unless the `audit`
+  exception is cited, and `# fleet:block pinprick-audit` unless the
+  `pinprick-audit-recipe` exception is cited
+- `README.md`: `<!-- fleet:block badges -->` when `readme.badges` is
+  configured and `<!-- fleet:block license-section -->` when `readme.license`
+  is configured
+
+Repo-owned justfile recipes and aliases must not reuse a managed recipe name
+(`install-hooks`, `npm-policy`, `audit`, `pinprick-audit`): just identifies a
+recipe by name alone, and the renderer rejects the collision in every mode.
+
+`ruby fleet/sync.rb --repo-root <checkout> --repo-name <name> --adopt`
+appends any missing fences empty to existing host files and renders, which
+covers most of the checklist mechanically; it never creates the host files
+themselves.
+
 ## Reusable Workflows
 
 Thin caller workflows keep `on:`, `permissions`, and `concurrency` in the
@@ -300,6 +323,12 @@ from a trusted ref.
   via reviewed PRs, whether Dependabot bumps or fleet-sync convergence.
 - The org Actions policy implicitly allows same-org actions and reusable
   workflows; the explicit allowlist is reserved for third-party trust grants.
+- The org-ruleset required guard (`fleet-guard-required.yml`) deliberately
+  runs the renderer from hub `main` against consumer pull requests so
+  hardening applies without waiting for a release. Residual risk: a
+  compromised hub `main` executes Ruby in consumer PR context, mitigated by
+  a contents-read-only token, no secrets in that context, and hub `main`
+  itself requiring reviewed pull requests.
 
 ## Running Locally
 
@@ -319,6 +348,13 @@ Guard a pull request branch against its base:
 
 ```bash
 ruby fleet/sync.rb --repo-root ../midden --repo-name midden --guard origin/main
+```
+
+Scaffold missing fences during adoption, then render (never with `--check` or
+`--guard`):
+
+```bash
+ruby fleet/sync.rb --repo-root ../midden --repo-name midden --adopt
 ```
 
 `--repo-name` is required and must name an entry in `fleet/repos.yml`; it
