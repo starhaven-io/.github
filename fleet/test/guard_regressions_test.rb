@@ -780,6 +780,61 @@ class GuardRegressionsTest < Minitest::Test
     )
   end
 
+  # Regression: the 2026-07-05 sync rendered the managed `audit` recipe into a
+  # consumer justfile that already owned an `audit token:` recipe, and just
+  # treats both as recipe `audit`.
+  def test_rejects_local_recipe_colliding_with_managed_just_recipe
+    repo = scenario("just-recipe-collision")
+    path = File.join(repo, "justfile")
+    File.write(path, "# Audit a cask by token\naudit token:\n    brew audit --cask {{ token }}\n\n#{File.read(path)}")
+    commit_all(repo, "add colliding local recipe")
+    message = "justfile defines recipe 'audit' outside fleet:block audit"
+
+    assert_rejects(
+      ["guard", guard(repo), message],
+      ["--check", sync(repo, "--check"), message],
+      ["sync", sync(repo), message]
+    )
+  end
+
+  def test_rejects_local_alias_shadowing_managed_just_recipe
+    repo = scenario("just-alias-collision")
+    File.open(File.join(repo, "justfile"), "a") { |file| file.puts("\nalias audit := check") }
+
+    assert_rejects(["sync", sync(repo), "justfile defines recipe 'audit' outside fleet:block audit"])
+  end
+
+  def test_allows_local_recipe_names_distinct_from_managed_ones
+    repo = scenario("just-recipe-distinct")
+    path = File.join(repo, "justfile")
+    File.write(path, "audit-cask token:\n    brew audit --cask {{ token }}\n\n#{File.read(path)}")
+
+    assert_sync_success(sync(repo))
+    assert_sync_success(sync(repo, "--check"))
+  end
+
+  def test_guard_ignores_preexisting_just_recipe_collision_on_untouched_justfile
+    repo = scenario("just-recipe-collision-untouched")
+    path = File.join(repo, "justfile")
+    File.write(path, "audit token:\n    brew audit --cask {{ token }}\n\n#{File.read(path)}")
+    commit_all(repo, "add colliding local recipe")
+    File.open(File.join(repo, "SECURITY.md"), "a") { |file| file.puts("\nUnrelated edit.") }
+    commit_all(repo, "unrelated edit")
+
+    assert_sync_success(guard(repo))
+  end
+
+  def test_rejects_overlapping_managed_just_recipe_names
+    repo = scenario("just-recipe-managed-overlap")
+    File.write(File.join(repo, "fleet/blocks/audit.just"),
+               "audit:\n    zizmor --persona auditor .github/workflows/\n\npinprick-audit:\n    true\n")
+
+    assert_rejects(
+      ["sync", sync(repo),
+       "fleet:block audit and fleet:block pinprick-audit both define justfile recipe 'pinprick-audit'"]
+    )
+  end
+
   def test_rejects_symlinked_block_hosts
     repo = scenario("symlinked-block-host")
     symlink_path_to_copy(repo, "AGENTS.md", "AGENTS-target.md")
