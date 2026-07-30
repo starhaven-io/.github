@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/starhaven-io/.github/security/policy
+    about: >-
+      Do not report vulnerabilities in public issues. Follow the security
+      policy: email security@starhaven.io or use GitHub private vulnerability
+      reporting from the affected repository's Security tab.
