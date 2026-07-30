@@ -23,8 +23,7 @@ check:
     elif ! BUNDLE_GEMFILE=fleet/Gemfile bundle check &>/dev/null; then
         skip fleet-bundle "fleet bundle not installed" "BUNDLE_GEMFILE=fleet/Gemfile bundle install"
     else
-        run commit-msg-hook env BUNDLE_GEMFILE=fleet/Gemfile bundle exec ruby fleet/test/commit_msg_hook_test.rb
-        run guard-regressions env BUNDLE_GEMFILE=fleet/Gemfile bundle exec ruby fleet/test/guard_regressions_test.rb
+        run tests env BUNDLE_GEMFILE=fleet/Gemfile bundle exec ruby -e 'Dir["fleet/test/*_test.rb"].sort.each { |file| require File.expand_path(file) }'
         run rubocop env BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop --config fleet/.rubocop.yml --cache false fleet/
     fi
     if command -v zizmor &>/dev/null; then
@@ -56,9 +55,9 @@ check:
 rubocop:
     BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop --config fleet/.rubocop.yml --cache false fleet/
 
-# Run fleet guard security regression cases
-guard-regressions:
-    ruby fleet/test/guard_regressions_test.rb
+# Run the fleet test suites (commit-msg hook, guard regressions, conclusion contract, golden renders)
+tests:
+    BUNDLE_GEMFILE=fleet/Gemfile bundle exec ruby -e 'Dir["fleet/test/*_test.rb"].sort.each { |file| require File.expand_path(file) }'
 
 # fleet:block audit
 audit:
