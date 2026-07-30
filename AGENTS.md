@@ -6,48 +6,100 @@ accurate, restrained, and safe to publish. Changes here are visible at
 
 ## Project overview
 
-This is a small Markdown-only repository for GitHub community/profile files for
-the `starhaven-io` organization. It does not contain application source code,
-build tooling, or a test suite. Please follow these guidelines when
-contributing:
+This repository has two jobs for the `starhaven-io` organization:
+
+1. Org-wide community health files. GitHub serves `SECURITY.md`,
+   `CONTRIBUTING.md`, `.github/FUNDING.yml`, `.github/ISSUE_TEMPLATE/`, and
+   `.github/PULL_REQUEST_TEMPLATE.md` from here to every org repository without
+   its own copy, and renders `profile/README.md` as the public org landing
+   page.
+2. The fleet hub. `fleet/sync.rb`, a single stdlib-only Ruby renderer, manages
+   shared surfaces across the repositories listed in `fleet/repos.yml`:
+   byte-identical files, fenced `fleet:block` fragments, rendered workflow
+   callers, Dependabot and Renovate configs, and SHA pins for this hub's
+   reusable workflows inside repo-owned workflows. A GitHub App bot opens
+   verified convergence PRs (`fleet-sync.yml`), releases are CalVer tags cut
+   through `fleet-release.yml`, and a PR guard rejects consumer edits to
+   managed surfaces. `fleet/README.md` documents the design.
+
+The repository therefore contains Ruby source, an adversarial regression test
+suite, and CI tooling. Treat it like a small production codebase, not a
+Markdown-only profile repository.
 
 ## Required checks
 
-- Run `just check` to catch diff hygiene issues, workflow audit findings,
-  action supply-chain audit findings, and broken profile/community-health links.
-- Run `just install-hooks` once per clone so DCO sign-off and pre-push checks are
-  active.
+- Run `just check` before finishing. It runs git diff hygiene, the fleet test
+  suites under the locked bundle, RuboCop on `fleet/`, a zizmor workflow audit,
+  a pinprick action supply-chain audit, and a lychee link check. Missing local
+  tools count as failures with install hints.
+- Run `BUNDLE_GEMFILE=fleet/Gemfile bundle install` once per clone so the test
+  and lint steps run instead of being skipped.
+- Run `just install-hooks` once per clone so DCO sign-off and pre-push checks
+  are active.
 - Review the rendered Markdown shape of any changed `.md` file, especially
   `profile/README.md`, before finishing.
 - Check links and install snippets when adding or changing a project entry.
   Prefer exact GitHub repository URLs, canonical product/site URLs, and current
-  Homebrew install commands.
-- Run `just lychee` after changing README/profile links when you need the link
-  check by itself.
+  Homebrew install commands. Run `just lychee` for the link check by itself.
 - Confirm `git status --short` only shows intended changes.
 
 ## Repository structure
 
-- `README.md`: Describes this `.github` repository and points to the rendered
-  organization profile.
-- `.github/workflows/codeql.yml`: actions-only CodeQL analysis for workflow
-  changes.
-- `.github/workflows/link-check.yml`: weekly profile and community-health link
-  check.
-- `.github/workflows/pinprick-audit.yml`: workflow supply-chain audit.
-- `.github/workflows/zizmor.yml`: GitHub Actions security audit.
-- `.github/FUNDING.yml`: inherited organization funding metadata.
-- `CONTRIBUTING.md`: inherited contribution guidelines for repositories without
-  a local policy.
-- `profile/README.md`: Renders as the public profile at
-  <https://github.com/starhaven-io>.
-- `SECURITY.md`: inherited vulnerability disclosure policy.
-- `lychee.toml`: profile and community-health link-check configuration.
+Top level:
+
+- `README.md`: describes this repository. `profile/README.md` renders as the
+  public profile at <https://github.com/starhaven-io>.
+- `AGENTS.md`: shared instructions for AI coding agents. `CLAUDE.md` is a
+  compatibility pointer; keep it as exactly `@AGENTS.md`.
+- `CONTRIBUTING.md`, `SECURITY.md`, `.github/FUNDING.yml`,
+  `.github/ISSUE_TEMPLATE/`, `.github/PULL_REQUEST_TEMPLATE.md`: org-wide
+  inherited community-health files and default templates.
 - `renovate-config.json`: shared Renovate preset for tool pins that sit outside
   the Dependabot-managed ecosystems. See "Shared Renovate preset" below.
-- `AGENTS.md`: Shared instructions for AI coding agents working in this
-  repository.
-- `CLAUDE.md`: Compatibility pointer for Claude Code; keep it as `@AGENTS.md`.
+- `.fleet.yml`: this hub's own rendered fleet config (the hub is also a fleet
+  consumer). Managed by the sync; change `fleet/repos/.github.yml` instead.
+- `justfile`: `check`, `rubocop`, `tests`, `lychee`, and `install-hooks`
+  recipes, plus fleet-managed `audit` and `pinprick-audit` recipe blocks.
+- `.githooks/`: `commit-msg` (rejects AI attribution trailers, requires DCO
+  sign-off) and `pre-push` (`just check`).
+- `lychee.toml`: profile and community-health link-check configuration.
+- `.github/dependabot.yml`: bundler (`/fleet`) and github-actions updates with
+  a 7-day cooldown.
+
+`fleet/` (the renderer and its canon):
+
+- `sync.rb`: renderer, drift checker, and PR guard in one stdlib-only file.
+- `repos.yml` and `repos/<name>.yml`: consumer registry and per-repo config.
+- `files/`, `blocks/`, `templates/`: tier-1 whole files, tier-2 fenced block
+  content, and tier-3 ERB templates.
+- `test/`: the commit-msg hook tests, the guard and renderer regression suite,
+  the conclusion and conventional-commits workflow contract tests, and
+  golden-render tests that render every consumer config into a synthetic
+  skeleton; run them through the locked bundle (`just tests`).
+- `VERSION`: the current CalVer fleet release, tagged on merge.
+
+`.github/workflows/`, hub-facing:
+
+- `conclusion.yml`: the required PR check. It classifies changed paths, fans
+  out to the fleet guard, conventional commits, `fleet-validate.yml`, and the
+  workflow audits, and requires every relevant result.
+- `fleet-validate.yml`: renderer syntax, tests, and lint, plus a per-consumer
+  dry-run render with an idempotence check.
+- `fleet-guard.yml`: this repo's own rendered guard caller.
+- `fleet-guard-required.yml`: run from `@main` by an org ruleset against
+  consumer PRs; skips the hub itself.
+- `fleet-sync.yml`: renders consumers and opens verified sync PRs using App
+  credentials (push to `main`, weekly cron, dispatch).
+- `fleet-release.yml`: dispatch opens a `fleet/VERSION` bump PR; the merge to
+  `main` tags that version.
+- `codeql.yml`, `zizmor.yml`, `pinprick-audit.yml`, `link-check.yml`,
+  `warm-ruby-cache.yml`: analysis, security audits, link checking, and
+  bundler cache warming for this repository itself.
+
+`.github/workflows/reusable-*.yml`, called by consumers through SHA-pinned
+thin callers: `reusable-codeql.yml`, `reusable-conventional-commits.yml`,
+`reusable-fleet-guard.yml`, `reusable-link-check.yml`,
+`reusable-pinprick-audit.yml`, and `reusable-zizmor.yml`.
 
 ## Shared Renovate preset
 
@@ -124,6 +176,15 @@ regex manager can see them.
    unless the user asks for them and the source is trustworthy.
 10. Preserve plain Markdown portability; avoid HTML unless GitHub-flavored
     Markdown cannot express the needed layout cleanly.
+11. Never hand-edit fleet-managed surfaces: content inside `fleet:block`
+    fences, tier-1 and tier-3 rendered files, or reusable workflow pins, here
+    or in consumers. Change the canon under `fleet/` and let the sync render
+    it.
+12. Keep every workflow action SHA-pinned with a version comment, keep
+    top-level `permissions: {}` in every workflow that declares its own
+    triggers, and keep `persist-credentials: false` on checkouts. A reusable
+    workflow may omit `permissions` only to inherit the caller's grant, with
+    the reason stated in the file. zizmor and pinprick stay at zero findings.
 
 <!-- fleet:block commit-and-pr-conventions -->
 
