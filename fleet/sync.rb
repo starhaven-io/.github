@@ -67,7 +67,6 @@ class FleetSync
   PARAM_KEYS = %w[
     astro-docs
     codeql
-    codeql-languages
     dependabot
     link-check
     npm-policy
@@ -96,6 +95,10 @@ class FleetSync
   CODEQL_BUILD_MODES = ["", "none", "autobuild", "manual"].freeze
   CODEQL_BUILD_PROFILES = ["", "swift-package", "brewy-xcode"].freeze
   FLEET_MARKER_PATTERN = /<!--\s*fleet:(?:block|end)\b/
+  # A just recipe or alias definition starts at column 0; `(?!=)` keeps
+  # `name := value` assignments and `set`/`export` directives out.
+  JUST_RECIPE_PATTERN = /\A@?(?<name>[A-Za-z_][A-Za-z0-9_-]*)[^:]*:(?!=)/
+  JUST_ALIAS_PATTERN = /\Aalias\s+(?<name>[A-Za-z_][A-Za-z0-9_-]*)\s*:=/
   REUSABLE_WORKFLOW_USES_PATTERN = %r{
     ^(?<prefix>\s*uses:\s*)
     (?<quote>["']?)
@@ -113,25 +116,30 @@ class FleetSync
 
   attr_reader :changes
 
-  def initialize(hub_root:, repo_root:, repo_name:, check:, guard_base:, hub: false)
+  def initialize(hub_root:, repo_root:, repo_name:, check:, guard_base:, hub: false, adopt: false)
     @hub_root = Pathname(hub_root).expand_path
     @repo_root = Pathname(repo_root).expand_path
     @repo_name = repo_name
     @check = check || !guard_base.nil?
     @guard_base = guard_base
     @hub = hub
+    @adopt = adopt
     @changes = []
   end
 
   def run
+    raise FleetError, "--adopt cannot be combined with --check or --guard" if @adopt && @check
+
     validate_guard_repository_identity
     config = load_config
     validate_config(config)
     validate_rendered_config_path
     assert_unique_marked_blocks(config)
+    assert_unique_just_recipes(config)
 
     return run_guard(config) if @guard_base
 
+    adopt_missing_fences(config) if @adopt
     render_all(config)
     report_changes
     raise FleetError, "fleet sync drift detected" if @check && @changes.any?
@@ -273,7 +281,6 @@ class FleetSync
     validate_npm_policy(params["npm-policy"]) if params.key?("npm-policy")
     validate_link_check(params["link-check"]) if params.key?("link-check")
     validate_codeql(params["codeql"]) if params.key?("codeql")
-    validate_string_array(params, "codeql-languages", ".fleet.yml params.codeql-languages")
     validate_pinprick_audit(params["pinprick-audit"]) if params.key?("pinprick-audit")
     validate_zizmor(params["zizmor"]) if params.key?("zizmor")
     validate_readme(params["readme"]) if params.key?("readme")
@@ -612,16 +619,8 @@ class FleetSync
       read_path(hub_path("blocks/local-state.gitignore"))
     )
 
-    replace_just_recipe("install-hooks", read_path(hub_path("blocks/install-hooks.just")))
-    if params["npm-policy"]
-      replace_just_recipe(
-        "npm-policy",
-        render_template("npm-policy.just.erb", projects: params.fetch("npm-policy").fetch("projects"))
-      )
-    end
-    replace_just_recipe("audit", read_path(hub_path("blocks/audit.just"))) unless exception?(config, "audit")
-    unless exception?(config, "pinprick-audit-recipe")
-      replace_just_recipe("pinprick-audit", read_path(hub_path("blocks/pinprick-audit.just")))
+    managed_just_bodies(config).each do |name, body|
+      replace_marked_block("justfile", name, :hash, body)
     end
 
     readme = params["readme"].is_a?(Hash) ? params["readme"] : {}
@@ -648,6 +647,20 @@ class FleetSync
     replace_marked_block("README.md", "license-section", :markdown, body)
   end
 
+  def managed_just_bodies(config)
+    params = config_params(config)
+    bodies = { "install-hooks" => read_path(hub_path("blocks/install-hooks.just")) }
+    if params["npm-policy"]
+      bodies["npm-policy"] =
+        render_template("npm-policy.just.erb", projects: params.fetch("npm-policy").fetch("projects"))
+    end
+    bodies["audit"] = read_path(hub_path("blocks/audit.just")) unless exception?(config, "audit")
+    unless exception?(config, "pinprick-audit-recipe")
+      bodies["pinprick-audit"] = read_path(hub_path("blocks/pinprick-audit.just"))
+    end
+    bodies
+  end
+
   def render_tier3(config)
     params = config_params(config)
 
@@ -663,9 +676,9 @@ class FleetSync
 
     render_renovate if params["renovate"]
     render_zizmor(params.fetch("zizmor", {})) unless exception?(config, "zizmor")
-    render_pinprick_audit(params.fetch("pinprick-audit", {}), config) unless exception?(config, "pinprick-audit")
+    render_pinprick_audit(params.fetch("pinprick-audit", {})) unless exception?(config, "pinprick-audit")
     render_link_check(params.fetch("link-check")) if params["link-check"]
-    render_codeql(params, config) unless exception?(config, "codeql")
+    render_codeql(params.fetch("codeql", {})) unless exception?(config, "codeql")
   end
 
   def render_fleet_guard
@@ -706,7 +719,7 @@ class FleetSync
     )
   end
 
-  def render_pinprick_audit(pinprick_config, _config)
+  def render_pinprick_audit(pinprick_config)
     advanced_security = pinprick_config.fetch("advanced-security", SAME_ORG_ADVANCED_SECURITY)
     advanced_security = advanced_security == "true" if %w[true false].include?(advanced_security)
     fail_on_findings = pinprick_config.fetch("fail-on-findings", true)
@@ -749,9 +762,8 @@ class FleetSync
     )
   end
 
-  def render_codeql(params, _config)
-    codeql = params["codeql"] || {}
-    languages = codeql["languages"] || params["codeql-languages"]
+  def render_codeql(codeql)
+    languages = codeql["languages"]
     return unless languages
 
     ref, version = reusable_pin
@@ -975,7 +987,7 @@ class FleetSync
     files << ".github/workflows/zizmor.yml" unless exception?(config, "zizmor")
     files << ".github/workflows/pinprick-audit.yml" unless exception?(config, "pinprick-audit")
     files << ".github/workflows/link-check.yml" if params["link-check"]
-    files << ".github/workflows/codeql.yml" if (params["codeql"] || {})["languages"] || params["codeql-languages"]
+    files << ".github/workflows/codeql.yml" if (params["codeql"] || {})["languages"]
     files
   end
 
@@ -1015,6 +1027,87 @@ class FleetSync
 
       raise FleetError, duplicate_marker_message(block, count)
     end
+  end
+
+  # Adoption requires every managed fence to pre-exist in its host file.
+  # --adopt appends the missing ones empty, so a first render can succeed
+  # without hand-inserting each fence. Host files are never created, and a
+  # start marker without its end marker is left alone for the renderer to
+  # reject rather than papered over with a second fence.
+  def adopt_missing_fences(config)
+    guard_managed_blocks(config).each do |block|
+      path = repo_path(block.fetch(:path))
+      next unless regular_file?(path)
+
+      name = block.fetch(:name)
+      style = block.fetch(:style)
+      text = read_path(path)
+      next if text.scan(block_start_marker(name, style)).any?
+
+      write_path(path, "#{text.chomp}\n\n#{empty_fence(name, style)}\n")
+    end
+  end
+
+  def empty_fence(block_name, style)
+    case style
+    when :markdown
+      "<!-- fleet:block #{block_name} -->\n<!-- fleet:end -->"
+    when :hash
+      "# fleet:block #{block_name}\n# fleet:end"
+    else
+      raise FleetError, "unknown marker style #{style}"
+    end
+  end
+
+  # just identifies a recipe by name alone (`audit token:` and `audit:` are the
+  # same recipe), so a managed recipe that shares a name with a repo-owned one
+  # either breaks every `just` invocation outright or, under
+  # allow-duplicate-recipes, lets a later repo-owned copy shadow the managed
+  # recipe. Fail before rendering can create either state. Guard runs only
+  # enforce this on pull requests that touch the justfile: a collision that
+  # predates the branch belongs to the sync, not to the author.
+  def assert_unique_just_recipes(config)
+    return if @guard_base && !guard_changed_paths.include?("justfile")
+
+    path = repo_path("justfile")
+    return unless regular_file?(path)
+
+    bodies = managed_just_bodies(config)
+    return if bodies.empty?
+
+    local = read_path(path)
+    bodies.each_key { |name| local = local.sub(marker_regex(name, :hash), "") }
+    local_names = just_recipe_names(local)
+
+    managed_names = {}
+    bodies.each do |block_name, body|
+      just_recipe_names(body).each do |recipe|
+        raise FleetError, just_recipe_collision_message(recipe, block_name) if local_names.include?(recipe)
+        if managed_names.key?(recipe)
+          raise FleetError, just_recipe_block_overlap_message(recipe, managed_names.fetch(recipe), block_name)
+        end
+
+        managed_names[recipe] = block_name
+      end
+    end
+  end
+
+  def just_recipe_names(text)
+    text.each_line.filter_map do |line|
+      match = line.match(JUST_ALIAS_PATTERN) || line.match(JUST_RECIPE_PATTERN)
+      match && match[:name]
+    end.uniq
+  end
+
+  def just_recipe_collision_message(recipe, block_name)
+    "justfile defines recipe '#{recipe}' outside fleet:block #{block_name}, which also defines it; " \
+      "just identifies a recipe by name alone, so the duplicate breaks or shadows the managed recipe. " \
+      "Rename the repo-owned recipe or take an exception in fleet/repos/#{required_repo_name}.yml."
+  end
+
+  def just_recipe_block_overlap_message(recipe, first_block, second_block)
+    "fleet:block #{first_block} and fleet:block #{second_block} both define justfile recipe '#{recipe}'; " \
+      "managed blocks must not overlap because just identifies a recipe by name alone."
   end
 
   def block_start_marker(block_name, style)
@@ -1251,25 +1344,6 @@ class FleetSync
     write_file(relative_path, next_content, "#{relative_path}:#{block_name}")
   end
 
-  def replace_just_recipe(block_name, body)
-    path = repo_path("justfile")
-    raise FleetError, "justfile is missing" unless managed_path_present?(path)
-    raise FleetError, non_regular_file_message("justfile") unless regular_file?(path)
-
-    current = read_path(path)
-    replacement = fenced_block(block_name, :hash, body)
-    marker = marker_regex(block_name, :hash)
-
-    next_content =
-      if current.match?(marker)
-        current.sub(marker, replacement)
-      else
-        raise FleetError, "justfile is missing fleet:block #{block_name}"
-      end
-
-    write_file("justfile", next_content, "justfile:#{block_name}")
-  end
-
   def fenced_block(block_name, style, body)
     body = body.strip
     case style
@@ -1421,7 +1495,8 @@ options = {
   repo_name: nil,
   check: false,
   guard_base: nil,
-  hub: false
+  hub: false,
+  adopt: false
 }
 
 OptionParser.new do |parser|
@@ -1430,6 +1505,9 @@ OptionParser.new do |parser|
   parser.on("--repo-root PATH", "Consumer repository root") { |value| options[:repo_root] = value }
   parser.on("--repo-name NAME", "Consumer repository name") { |value| options[:repo_name] = value }
   parser.on("--check", "Report drift without writing") { options[:check] = true }
+  parser.on("--adopt", "Append missing fleet:block fences to existing host files before rendering") do
+    options[:adopt] = true
+  end
   parser.on("--hub", "Treat this repository as the canonical fleet hub") { options[:hub] = true }
   parser.on("--guard BASE_REF", "Reject unmanaged edits to fleet-managed surfaces") do |value|
     options[:guard_base] = value

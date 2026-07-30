@@ -1,0 +1,31 @@
+name: Bug report
+description: Report something that is broken or behaving unexpectedly.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: >-
+        What did you do, what did you expect, and what happened instead?
+      placeholder: Steps to reproduce, expected behavior, actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: >-
+        Version, OS, and install method (for example the `brew install`
+        command used), as applicable.
+    validations:
+      required: false
+  - type: textarea
+    id: output
+    attributes:
+      label: Logs or output
+      description: >-
+        Relevant output, error messages, or screenshots. Redact anything
+        sensitive.
+    validations:
+      required: false

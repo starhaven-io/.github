@@ -41,12 +41,10 @@ jobs:
             end
           '
 
-      - name: Run regression suites
+      - name: Run test suites
         env:
           BUNDLE_GEMFILE: fleet/Gemfile
-        run: |
-          bundle exec ruby fleet/test/commit_msg_hook_test.rb
-          bundle exec ruby fleet/test/guard_regressions_test.rb
+        run: bundle exec ruby -e 'Dir["fleet/test/*_test.rb"].sort.each { |file| require File.expand_path(file) }'
 
       - name: Lint renderer
         env:

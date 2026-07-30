@@ -10,6 +10,7 @@ require "minitest/autorun"
 ROOT = File.expand_path("../..", __dir__)
 SYNC = ["ruby", "-rpathname", "fleet/sync.rb"].freeze
 CONCLUSION_WORKFLOW = File.join(ROOT, ".github/workflows/conclusion.yml")
+CONVENTIONAL_COMMITS_WORKFLOW = File.join(ROOT, ".github/workflows/reusable-conventional-commits.yml")
 PINPRICK_AUDIT_WORKFLOW = File.join(ROOT, ".github/workflows/pinprick-audit.yml")
 
 CommandResult = Struct.new(:stdout, :stderr, :status, keyword_init: true) do
@@ -279,6 +280,17 @@ class GuardRegressionsTest < Minitest::Test
     write_fleet_config(repo, config)
 
     assert_rejects(["sync", sync(repo), ".fleet.yml contains unknown keys: unexpected"])
+  end
+
+  # codeql-languages was a pre-codeql-mapping compatibility alias; nothing in
+  # fleet/repos/*.yml uses it, so it must reject rather than silently render.
+  def test_rejects_removed_codeql_languages_compatibility_key
+    repo = scenario("codeql-languages-removed")
+    config = fleet_config(repo)
+    config.fetch("params")["codeql-languages"] = ["ruby"]
+    write_fleet_config(repo, config)
+
+    assert_rejects(["sync", sync(repo), ".fleet.yml params contains unknown keys: codeql-languages"])
   end
 
   def test_renders_dependabot_entry_policies
@@ -780,6 +792,61 @@ class GuardRegressionsTest < Minitest::Test
     )
   end
 
+  # Regression: the 2026-07-05 sync rendered the managed `audit` recipe into a
+  # consumer justfile that already owned an `audit token:` recipe, and just
+  # treats both as recipe `audit`.
+  def test_rejects_local_recipe_colliding_with_managed_just_recipe
+    repo = scenario("just-recipe-collision")
+    path = File.join(repo, "justfile")
+    File.write(path, "# Audit a cask by token\naudit token:\n    brew audit --cask {{ token }}\n\n#{File.read(path)}")
+    commit_all(repo, "add colliding local recipe")
+    message = "justfile defines recipe 'audit' outside fleet:block audit"
+
+    assert_rejects(
+      ["guard", guard(repo), message],
+      ["--check", sync(repo, "--check"), message],
+      ["sync", sync(repo), message]
+    )
+  end
+
+  def test_rejects_local_alias_shadowing_managed_just_recipe
+    repo = scenario("just-alias-collision")
+    File.open(File.join(repo, "justfile"), "a") { |file| file.puts("\nalias audit := check") }
+
+    assert_rejects(["sync", sync(repo), "justfile defines recipe 'audit' outside fleet:block audit"])
+  end
+
+  def test_allows_local_recipe_names_distinct_from_managed_ones
+    repo = scenario("just-recipe-distinct")
+    path = File.join(repo, "justfile")
+    File.write(path, "audit-cask token:\n    brew audit --cask {{ token }}\n\n#{File.read(path)}")
+
+    assert_sync_success(sync(repo))
+    assert_sync_success(sync(repo, "--check"))
+  end
+
+  def test_guard_ignores_preexisting_just_recipe_collision_on_untouched_justfile
+    repo = scenario("just-recipe-collision-untouched")
+    path = File.join(repo, "justfile")
+    File.write(path, "audit token:\n    brew audit --cask {{ token }}\n\n#{File.read(path)}")
+    commit_all(repo, "add colliding local recipe")
+    File.open(File.join(repo, "SECURITY.md"), "a") { |file| file.puts("\nUnrelated edit.") }
+    commit_all(repo, "unrelated edit")
+
+    assert_sync_success(guard(repo))
+  end
+
+  def test_rejects_overlapping_managed_just_recipe_names
+    repo = scenario("just-recipe-managed-overlap")
+    File.write(File.join(repo, "fleet/blocks/audit.just"),
+               "audit:\n    zizmor --persona auditor .github/workflows/\n\npinprick-audit:\n    true\n")
+
+    assert_rejects(
+      ["sync", sync(repo),
+       "fleet:block audit and fleet:block pinprick-audit both define justfile recipe 'pinprick-audit'"]
+    )
+  end
+
   def test_rejects_symlinked_block_hosts
     repo = scenario("symlinked-block-host")
     symlink_path_to_copy(repo, "AGENTS.md", "AGENTS-target.md")
@@ -891,6 +958,43 @@ class GuardRegressionsTest < Minitest::Test
     assert_rejects(["sync", sync(repo), ".fleet.yml params.npm-policy contains unknown keys: dirs"])
   end
 
+  def test_adopt_appends_missing_fences_and_renders
+    repo = scenario("adopt-missing-fences")
+    agents = File.join(repo, "AGENTS.md")
+    File.write(agents, File.read(agents)
+      .sub(/^<!-- fleet:block commit-and-pr-conventions -->\n.*?^<!-- fleet:end -->\n/m, ""))
+    justfile = File.join(repo, "justfile")
+    File.write(justfile, File.read(justfile).sub(/^# fleet:block audit\n.*?^# fleet:end\n/m, ""))
+
+    assert_rejects(["sync", sync(repo), "AGENTS.md is missing fleet:block commit-and-pr-conventions"])
+
+    assert_sync_success(sync(repo, "--adopt"))
+    assert_sync_success(sync(repo, "--check"))
+    assert_includes File.read(justfile), "zizmor --persona auditor .github/workflows/"
+    assert_includes File.read(agents), "## Commit and PR conventions"
+  end
+
+  def test_adopt_leaves_mangled_fences_for_the_renderer
+    repo = scenario("adopt-mangled-fence")
+    agents = File.join(repo, "AGENTS.md")
+    File.write(agents, File.read(agents).sub("\n<!-- fleet:end -->", ""))
+
+    assert_rejects(
+      ["sync --adopt", sync(repo, "--adopt"), "AGENTS.md is missing fleet:block commit-and-pr-conventions"]
+    )
+    assert_equal 1, File.read(agents).scan(/^<!-- fleet:block commit-and-pr-conventions -->$/).length
+  end
+
+  def test_rejects_adopt_combined_with_check_or_guard
+    repo = scenario("adopt-with-check")
+    message = "--adopt cannot be combined with --check or --guard"
+
+    assert_rejects(
+      ["--adopt --check", sync(repo, "--adopt", "--check"), message],
+      ["--adopt --guard", sync(repo, "--adopt", "--guard", "HEAD", "--hub"), message]
+    )
+  end
+
   def test_rejects_broken_symlink_whole_files
     repo = scenario("broken-symlink-whole-file")
     workflow = File.join(repo, ".github/workflows/zizmor.yml")
@@ -902,6 +1006,77 @@ class GuardRegressionsTest < Minitest::Test
       ["guard", guard(repo), "managed surface change rejected"],
       ["--check", sync(repo, "--check"), "fleet sync drift detected"]
     )
+  end
+end
+
+class ConventionalCommitsContractTest < Minitest::Test
+  include GuardHelpers
+
+  def setup
+    workflow = YAML.safe_load_file(CONVENTIONAL_COMMITS_WORKFLOW, permitted_classes: [], aliases: false)
+    steps = workflow.fetch("jobs").fetch("conventional-commits").fetch("steps")
+    @title_script = steps.find { |step| step["name"] == "Check pull request title" }.fetch("run")
+    @push_script = steps.find { |step| step["name"] == "Check pushed commits" }.fetch("run")
+  end
+
+  def check_title(title)
+    run_command_env({ "TITLE" => title }, ROOT, "bash", "-euo", "pipefail", "-c", @title_script)
+  end
+
+  def check_push(repo, before, after)
+    run_command_env({ "BEFORE" => before, "AFTER" => after }, repo, "bash", "-euo", "pipefail", "-c", @push_script)
+  end
+
+  def test_title_check_accepts_conventional_titles_including_breaking_changes
+    [
+      "feat: add adoption helper",
+      "fix(fleet): reject duplicate recipes",
+      "feat!: drop the legacy input",
+      "refactor(sync)!: rework the guard surface"
+    ].each do |title|
+      assert check_title(title).success?, "expected title #{title.inspect} to be accepted"
+    end
+  end
+
+  def test_title_check_rejects_unconventional_titles
+    [
+      "update stuff",
+      "Feat: capitalized type",
+      "feat!!: doubled marker",
+      "feat!",
+      "feat(scope) !: spaced marker"
+    ].each do |title|
+      refute check_title(title).success?, "expected title #{title.inspect} to be rejected"
+    end
+  end
+
+  def test_push_check_accepts_breaking_change_subjects
+    repo = push_fixture("feat!: drop the legacy field")
+
+    result = check_push(repo, git(repo, "rev-parse", "HEAD~1").stdout.strip,
+                        git(repo, "rev-parse", "HEAD").stdout.strip)
+    assert result.success?, result.output
+  end
+
+  def test_push_check_rejects_unconventional_subjects
+    repo = push_fixture("update stuff")
+
+    result = check_push(repo, git(repo, "rev-parse", "HEAD~1").stdout.strip,
+                        git(repo, "rev-parse", "HEAD").stdout.strip)
+    refute result.success?, "expected unconventional subject to be rejected"
+    assert_includes result.output, "update stuff"
+  end
+
+  private
+
+  def push_fixture(subject)
+    repo = Dir.mktmpdir("conventional-push-", TMPDIR)
+    git(repo, "init", "-q")
+    File.write(File.join(repo, "file"), "baseline\n")
+    commit_all(repo, "chore: baseline")
+    File.write(File.join(repo, "file"), "changed\n")
+    commit_all(repo, subject)
+    repo
   end
 end
 
@@ -922,10 +1097,14 @@ class ConclusionContractTest < Minitest::Test
     refute guard.key?("if")
     assert_includes guard.fetch("uses"), "/.github/workflows/reusable-fleet-guard.yml@"
 
+    commits = @jobs.fetch("commits")
+    refute commits.key?("if")
+    assert_equal "./.github/workflows/reusable-conventional-commits.yml", commits.fetch("uses")
+
     conclusion = @jobs.fetch("conclusion")
     assert_equal "conclusion", conclusion.fetch("name")
     assert_equal "${{ always() }}", conclusion.fetch("if")
-    assert_equal %w[changes guard fleet audit], conclusion.fetch("needs")
+    assert_equal %w[changes guard commits fleet audit zizmor], conclusion.fetch("needs")
   end
 
   def test_docs_only_change_intentionally_skips_conditional_work
@@ -935,12 +1114,17 @@ class ConclusionContractTest < Minitest::Test
       "AUDIT_REQUIRED" => "false",
       "AUDIT_RESULT" => "skipped",
       "FLEET_REQUIRED" => "false",
-      "FLEET_RESULT" => "skipped"
+      "FLEET_RESULT" => "skipped",
+      "ZIZMOR_RESULT" => "skipped"
     )
   end
 
   def test_guard_failure_fails_conclusion
     assert_conclusion_failure("GUARD_RESULT" => "failure")
+  end
+
+  def test_conventional_commits_failure_fails_conclusion
+    assert_conclusion_failure("COMMITS_RESULT" => "failure")
   end
 
   def test_change_classification_fails_closed_on_unknown_revision
@@ -1029,11 +1213,32 @@ class ConclusionContractTest < Minitest::Test
 
     assert_conclusion_success(
       "AUDIT_REQUIRED" => "true",
-      "AUDIT_RESULT" => "success"
+      "AUDIT_RESULT" => "success",
+      "ZIZMOR_RESULT" => "success"
     )
     assert_conclusion_failure(
       "AUDIT_REQUIRED" => "true",
-      "AUDIT_RESULT" => "failure"
+      "AUDIT_RESULT" => "failure",
+      "ZIZMOR_RESULT" => "success"
+    )
+  end
+
+  def test_workflow_security_audit_gates_at_pull_request_time
+    zizmor = @jobs.fetch("zizmor")
+    assert_equal "needs.changes.outputs.audit == 'true'", zizmor.fetch("if")
+    assert_equal "./.github/workflows/reusable-zizmor.yml", zizmor.fetch("uses")
+    assert_equal({ "contents" => "read" }, zizmor.fetch("permissions"))
+    assert_equal false, zizmor.fetch("with").fetch("advanced-security")
+
+    assert_conclusion_success(
+      "AUDIT_REQUIRED" => "true",
+      "AUDIT_RESULT" => "success",
+      "ZIZMOR_RESULT" => "success"
+    )
+    assert_conclusion_failure(
+      "AUDIT_REQUIRED" => "true",
+      "AUDIT_RESULT" => "success",
+      "ZIZMOR_RESULT" => "failure"
     )
   end
 
@@ -1044,10 +1249,14 @@ class ConclusionContractTest < Minitest::Test
       { "CHANGES_RESULT" => "skipped" },
       { "GUARD_RESULT" => "cancelled" },
       { "GUARD_RESULT" => "skipped" },
+      { "COMMITS_RESULT" => "cancelled" },
+      { "COMMITS_RESULT" => "skipped" },
       { "FLEET_REQUIRED" => "true", "FLEET_RESULT" => "cancelled" },
       { "FLEET_REQUIRED" => "true", "FLEET_RESULT" => "skipped" },
       { "AUDIT_REQUIRED" => "true", "AUDIT_RESULT" => "cancelled" },
-      { "AUDIT_REQUIRED" => "true", "AUDIT_RESULT" => "skipped" }
+      { "AUDIT_REQUIRED" => "true", "AUDIT_RESULT" => "skipped" },
+      { "AUDIT_REQUIRED" => "true", "AUDIT_RESULT" => "success", "ZIZMOR_RESULT" => "cancelled" },
+      { "AUDIT_REQUIRED" => "true", "AUDIT_RESULT" => "success", "ZIZMOR_RESULT" => "skipped" }
     ].each do |overrides|
       assert_conclusion_failure(overrides)
     end
@@ -1109,9 +1318,11 @@ class ConclusionContractTest < Minitest::Test
       "AUDIT_REQUIRED" => "false",
       "AUDIT_RESULT" => "skipped",
       "CHANGES_RESULT" => "success",
+      "COMMITS_RESULT" => "success",
       "FLEET_REQUIRED" => "false",
       "FLEET_RESULT" => "skipped",
-      "GUARD_RESULT" => "success"
+      "GUARD_RESULT" => "success",
+      "ZIZMOR_RESULT" => "skipped"
     }
     run_command_env(
       defaults.merge(overrides),
