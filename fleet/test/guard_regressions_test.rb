@@ -282,6 +282,17 @@ class GuardRegressionsTest < Minitest::Test
     assert_rejects(["sync", sync(repo), ".fleet.yml contains unknown keys: unexpected"])
   end
 
+  # codeql-languages was a pre-codeql-mapping compatibility alias; nothing in
+  # fleet/repos/*.yml uses it, so it must reject rather than silently render.
+  def test_rejects_removed_codeql_languages_compatibility_key
+    repo = scenario("codeql-languages-removed")
+    config = fleet_config(repo)
+    config.fetch("params")["codeql-languages"] = ["ruby"]
+    write_fleet_config(repo, config)
+
+    assert_rejects(["sync", sync(repo), ".fleet.yml params contains unknown keys: codeql-languages"])
+  end
+
   def test_renders_dependabot_entry_policies
     repo = scenario("dependabot-entry-policies")
     config = fleet_config(repo)

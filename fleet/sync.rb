@@ -67,7 +67,6 @@ class FleetSync
   PARAM_KEYS = %w[
     astro-docs
     codeql
-    codeql-languages
     dependabot
     link-check
     npm-policy
@@ -278,7 +277,6 @@ class FleetSync
     validate_npm_policy(params["npm-policy"]) if params.key?("npm-policy")
     validate_link_check(params["link-check"]) if params.key?("link-check")
     validate_codeql(params["codeql"]) if params.key?("codeql")
-    validate_string_array(params, "codeql-languages", ".fleet.yml params.codeql-languages")
     validate_pinprick_audit(params["pinprick-audit"]) if params.key?("pinprick-audit")
     validate_zizmor(params["zizmor"]) if params.key?("zizmor")
     validate_readme(params["readme"]) if params.key?("readme")
@@ -674,9 +672,9 @@ class FleetSync
 
     render_renovate if params["renovate"]
     render_zizmor(params.fetch("zizmor", {})) unless exception?(config, "zizmor")
-    render_pinprick_audit(params.fetch("pinprick-audit", {}), config) unless exception?(config, "pinprick-audit")
+    render_pinprick_audit(params.fetch("pinprick-audit", {})) unless exception?(config, "pinprick-audit")
     render_link_check(params.fetch("link-check")) if params["link-check"]
-    render_codeql(params, config) unless exception?(config, "codeql")
+    render_codeql(params.fetch("codeql", {})) unless exception?(config, "codeql")
   end
 
   def render_fleet_guard
@@ -717,7 +715,7 @@ class FleetSync
     )
   end
 
-  def render_pinprick_audit(pinprick_config, _config)
+  def render_pinprick_audit(pinprick_config)
     advanced_security = pinprick_config.fetch("advanced-security", SAME_ORG_ADVANCED_SECURITY)
     advanced_security = advanced_security == "true" if %w[true false].include?(advanced_security)
     fail_on_findings = pinprick_config.fetch("fail-on-findings", true)
@@ -760,9 +758,8 @@ class FleetSync
     )
   end
 
-  def render_codeql(params, _config)
-    codeql = params["codeql"] || {}
-    languages = codeql["languages"] || params["codeql-languages"]
+  def render_codeql(codeql)
+    languages = codeql["languages"]
     return unless languages
 
     ref, version = reusable_pin
@@ -986,7 +983,7 @@ class FleetSync
     files << ".github/workflows/zizmor.yml" unless exception?(config, "zizmor")
     files << ".github/workflows/pinprick-audit.yml" unless exception?(config, "pinprick-audit")
     files << ".github/workflows/link-check.yml" if params["link-check"]
-    files << ".github/workflows/codeql.yml" if (params["codeql"] || {})["languages"] || params["codeql-languages"]
+    files << ".github/workflows/codeql.yml" if (params["codeql"] || {})["languages"]
     files
   end
 
