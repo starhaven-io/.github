@@ -11,8 +11,11 @@ precedence.
 - Use Conventional Commits for commit messages and PR titles, for example
   `fix: handle missing package metadata`.
 - Sign off commits with `git commit -s` for DCO.
-- Keep PR descriptions to a concise summary of the change. Avoid generated
-  footers, tool-attribution blocks, and unrelated process notes.
+- Keep PR descriptions to a concise summary of the change. When AI/LLM was used
+  to generate or assist with a pull request, name the tool and model in the
+  initial description, briefly describe its role, and state how the output was
+  reviewed or verified. Keep disclosure factual and concise. Avoid promotional
+  "generated with" footers and unrelated process notes.
 
 ## Local Checks
 
