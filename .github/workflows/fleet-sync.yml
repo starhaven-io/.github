@@ -144,13 +144,20 @@ jobs:
         id: drift
         working-directory: repo
         run: |
-          STATUS="$(git status --porcelain=v1 -uall)"
-          if [ -z "${STATUS}" ]; then
+          # Porcelain v1 C-quotes paths with spaces or quote-worthy bytes;
+          # NUL delimiting keeps every path literal for the commit step.
+          status_entries="${RUNNER_TEMP}/fleet-sync-status"
+          git status --porcelain=v1 -z -uall > "${status_entries}"
+          : > ../changed-files.txt
+          while IFS= read -r -d '' entry; do
+            printf '%s\n' "${entry:3}" >> ../changed-files.txt
+          done < "${status_entries}"
+
+          if [ ! -s ../changed-files.txt ]; then
             echo "changed=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
-          printf "%s\n" "${STATUS}" | sed -E 's/^...//' > ../changed-files.txt
           {
             echo "changed=true"
             echo "files<<EOF"
