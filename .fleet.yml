@@ -13,7 +13,13 @@ params:
     build-site: false
     authenticated-github: true
     schedule: "0 14 * * 1"
-    concurrency-group: "link-check"
+    pull-request-paths:
+      - "README.md"
+      - "profile/README.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+      - "lychee.toml"
+    concurrency-group: "link-check-${{ github.ref }}"
   codeql:
     languages: ["actions", "ruby"]
     paths: [".github/workflows/**", "fleet/**"]
