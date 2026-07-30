@@ -10,6 +10,7 @@ require "minitest/autorun"
 ROOT = File.expand_path("../..", __dir__)
 SYNC = ["ruby", "-rpathname", "fleet/sync.rb"].freeze
 CONCLUSION_WORKFLOW = File.join(ROOT, ".github/workflows/conclusion.yml")
+CONVENTIONAL_COMMITS_WORKFLOW = File.join(ROOT, ".github/workflows/reusable-conventional-commits.yml")
 PINPRICK_AUDIT_WORKFLOW = File.join(ROOT, ".github/workflows/pinprick-audit.yml")
 
 CommandResult = Struct.new(:stdout, :stderr, :status, keyword_init: true) do
@@ -957,6 +958,77 @@ class GuardRegressionsTest < Minitest::Test
       ["guard", guard(repo), "managed surface change rejected"],
       ["--check", sync(repo, "--check"), "fleet sync drift detected"]
     )
+  end
+end
+
+class ConventionalCommitsContractTest < Minitest::Test
+  include GuardHelpers
+
+  def setup
+    workflow = YAML.safe_load_file(CONVENTIONAL_COMMITS_WORKFLOW, permitted_classes: [], aliases: false)
+    steps = workflow.fetch("jobs").fetch("conventional-commits").fetch("steps")
+    @title_script = steps.find { |step| step["name"] == "Check pull request title" }.fetch("run")
+    @push_script = steps.find { |step| step["name"] == "Check pushed commits" }.fetch("run")
+  end
+
+  def check_title(title)
+    run_command_env({ "TITLE" => title }, ROOT, "bash", "-euo", "pipefail", "-c", @title_script)
+  end
+
+  def check_push(repo, before, after)
+    run_command_env({ "BEFORE" => before, "AFTER" => after }, repo, "bash", "-euo", "pipefail", "-c", @push_script)
+  end
+
+  def test_title_check_accepts_conventional_titles_including_breaking_changes
+    [
+      "feat: add adoption helper",
+      "fix(fleet): reject duplicate recipes",
+      "feat!: drop the legacy input",
+      "refactor(sync)!: rework the guard surface"
+    ].each do |title|
+      assert check_title(title).success?, "expected title #{title.inspect} to be accepted"
+    end
+  end
+
+  def test_title_check_rejects_unconventional_titles
+    [
+      "update stuff",
+      "Feat: capitalized type",
+      "feat!!: doubled marker",
+      "feat!",
+      "feat(scope) !: spaced marker"
+    ].each do |title|
+      refute check_title(title).success?, "expected title #{title.inspect} to be rejected"
+    end
+  end
+
+  def test_push_check_accepts_breaking_change_subjects
+    repo = push_fixture("feat!: drop the legacy field")
+
+    result = check_push(repo, git(repo, "rev-parse", "HEAD~1").stdout.strip,
+                        git(repo, "rev-parse", "HEAD").stdout.strip)
+    assert result.success?, result.output
+  end
+
+  def test_push_check_rejects_unconventional_subjects
+    repo = push_fixture("update stuff")
+
+    result = check_push(repo, git(repo, "rev-parse", "HEAD~1").stdout.strip,
+                        git(repo, "rev-parse", "HEAD").stdout.strip)
+    refute result.success?, "expected unconventional subject to be rejected"
+    assert_includes result.output, "update stuff"
+  end
+
+  private
+
+  def push_fixture(subject)
+    repo = Dir.mktmpdir("conventional-push-", TMPDIR)
+    git(repo, "init", "-q")
+    File.write(File.join(repo, "file"), "baseline\n")
+    commit_all(repo, "chore: baseline")
+    File.write(File.join(repo, "file"), "changed\n")
+    commit_all(repo, subject)
+    repo
   end
 end
 
