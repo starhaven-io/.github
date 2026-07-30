@@ -1,22 +1,24 @@
-name: Reusable zizmor
+name: Reusable zizmor # zizmor: ignore[excessive-permissions]
 
 on:
   workflow_call:
     inputs:
+      advanced-security:
+        type: boolean
+        default: true
       timeout-minutes:
         type: number
         default: 15
 
-permissions: {}
+# Permissions inherit from the caller: SARIF consumers grant security-events,
+# PR-time and no-GHAS callers grant contents only. Declaring more here than a
+# caller grants fails the run at startup.
 
 jobs:
-  zizmor:
+  zizmor: # zizmor: ignore[excessive-permissions]
     name: Analyze
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.timeout-minutes }}
-    permissions:
-      contents: read
-      security-events: write # required to upload SARIF results
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -25,3 +27,6 @@ jobs:
       - uses: zizmorcore/zizmor-action@6599ee8b7a49aef6a770f63d261d214911a7ce02 # v0.6.0
         with:
           persona: auditor
+          # Fork pull requests cannot upload SARIF with the read-only token;
+          # with advanced-security disabled zizmor gates directly instead.
+          advanced-security: ${{ inputs.advanced-security }}

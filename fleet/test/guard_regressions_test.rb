@@ -977,10 +977,14 @@ class ConclusionContractTest < Minitest::Test
     refute guard.key?("if")
     assert_includes guard.fetch("uses"), "/.github/workflows/reusable-fleet-guard.yml@"
 
+    commits = @jobs.fetch("commits")
+    refute commits.key?("if")
+    assert_equal "./.github/workflows/reusable-conventional-commits.yml", commits.fetch("uses")
+
     conclusion = @jobs.fetch("conclusion")
     assert_equal "conclusion", conclusion.fetch("name")
     assert_equal "${{ always() }}", conclusion.fetch("if")
-    assert_equal %w[changes guard fleet audit], conclusion.fetch("needs")
+    assert_equal %w[changes guard commits fleet audit zizmor], conclusion.fetch("needs")
   end
 
   def test_docs_only_change_intentionally_skips_conditional_work
@@ -990,12 +994,17 @@ class ConclusionContractTest < Minitest::Test
       "AUDIT_REQUIRED" => "false",
       "AUDIT_RESULT" => "skipped",
       "FLEET_REQUIRED" => "false",
-      "FLEET_RESULT" => "skipped"
+      "FLEET_RESULT" => "skipped",
+      "ZIZMOR_RESULT" => "skipped"
     )
   end
 
   def test_guard_failure_fails_conclusion
     assert_conclusion_failure("GUARD_RESULT" => "failure")
+  end
+
+  def test_conventional_commits_failure_fails_conclusion
+    assert_conclusion_failure("COMMITS_RESULT" => "failure")
   end
 
   def test_change_classification_fails_closed_on_unknown_revision
@@ -1084,11 +1093,32 @@ class ConclusionContractTest < Minitest::Test
 
     assert_conclusion_success(
       "AUDIT_REQUIRED" => "true",
-      "AUDIT_RESULT" => "success"
+      "AUDIT_RESULT" => "success",
+      "ZIZMOR_RESULT" => "success"
     )
     assert_conclusion_failure(
       "AUDIT_REQUIRED" => "true",
-      "AUDIT_RESULT" => "failure"
+      "AUDIT_RESULT" => "failure",
+      "ZIZMOR_RESULT" => "success"
+    )
+  end
+
+  def test_workflow_security_audit_gates_at_pull_request_time
+    zizmor = @jobs.fetch("zizmor")
+    assert_equal "needs.changes.outputs.audit == 'true'", zizmor.fetch("if")
+    assert_equal "./.github/workflows/reusable-zizmor.yml", zizmor.fetch("uses")
+    assert_equal({ "contents" => "read" }, zizmor.fetch("permissions"))
+    assert_equal false, zizmor.fetch("with").fetch("advanced-security")
+
+    assert_conclusion_success(
+      "AUDIT_REQUIRED" => "true",
+      "AUDIT_RESULT" => "success",
+      "ZIZMOR_RESULT" => "success"
+    )
+    assert_conclusion_failure(
+      "AUDIT_REQUIRED" => "true",
+      "AUDIT_RESULT" => "success",
+      "ZIZMOR_RESULT" => "failure"
     )
   end
 
@@ -1099,10 +1129,14 @@ class ConclusionContractTest < Minitest::Test
       { "CHANGES_RESULT" => "skipped" },
       { "GUARD_RESULT" => "cancelled" },
       { "GUARD_RESULT" => "skipped" },
+      { "COMMITS_RESULT" => "cancelled" },
+      { "COMMITS_RESULT" => "skipped" },
       { "FLEET_REQUIRED" => "true", "FLEET_RESULT" => "cancelled" },
       { "FLEET_REQUIRED" => "true", "FLEET_RESULT" => "skipped" },
       { "AUDIT_REQUIRED" => "true", "AUDIT_RESULT" => "cancelled" },
-      { "AUDIT_REQUIRED" => "true", "AUDIT_RESULT" => "skipped" }
+      { "AUDIT_REQUIRED" => "true", "AUDIT_RESULT" => "skipped" },
+      { "AUDIT_REQUIRED" => "true", "AUDIT_RESULT" => "success", "ZIZMOR_RESULT" => "cancelled" },
+      { "AUDIT_REQUIRED" => "true", "AUDIT_RESULT" => "success", "ZIZMOR_RESULT" => "skipped" }
     ].each do |overrides|
       assert_conclusion_failure(overrides)
     end
@@ -1164,9 +1198,11 @@ class ConclusionContractTest < Minitest::Test
       "AUDIT_REQUIRED" => "false",
       "AUDIT_RESULT" => "skipped",
       "CHANGES_RESULT" => "success",
+      "COMMITS_RESULT" => "success",
       "FLEET_REQUIRED" => "false",
       "FLEET_RESULT" => "skipped",
-      "GUARD_RESULT" => "success"
+      "GUARD_RESULT" => "success",
+      "ZIZMOR_RESULT" => "skipped"
     }
     run_command_env(
       defaults.merge(overrides),

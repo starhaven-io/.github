@@ -77,6 +77,13 @@ jobs:
     with:
       repo-name: ${{ github.event.repository.name }}
 
+  commits:
+    name: Conventional commits
+    permissions:
+      contents: read
+      pull-requests: read # required to read PR titles
+    uses: ./.github/workflows/reusable-conventional-commits.yml
+
   fleet:
     name: Fleet validate
     needs: changes
@@ -96,13 +103,27 @@ jobs:
       advanced-security: false
       fail-on-findings: true
 
+  zizmor:
+    name: Workflow security audit
+    needs: changes
+    if: needs.changes.outputs.audit == 'true'
+    permissions:
+      contents: read
+    # The local form runs the PR's own canon; the pull_request token cannot
+    # upload SARIF, so the audit gates directly instead.
+    uses: ./.github/workflows/reusable-zizmor.yml
+    with:
+      advanced-security: false
+
   conclusion:
     name: conclusion
     needs:
       - changes
       - guard
+      - commits
       - fleet
       - audit
+      - zizmor
     if: ${{ always() }}
     runs-on: ubuntu-slim
     timeout-minutes: 5
@@ -112,9 +133,11 @@ jobs:
           AUDIT_REQUIRED: ${{ needs.changes.outputs.audit }}
           AUDIT_RESULT: ${{ needs.audit.result }}
           CHANGES_RESULT: ${{ needs.changes.result }}
+          COMMITS_RESULT: ${{ needs.commits.result }}
           FLEET_REQUIRED: ${{ needs.changes.outputs.fleet }}
           FLEET_RESULT: ${{ needs.fleet.result }}
           GUARD_RESULT: ${{ needs.guard.result }}
+          ZIZMOR_RESULT: ${{ needs.zizmor.result }}
         run: |
           failed=0
 
@@ -150,7 +173,9 @@ jobs:
 
           require_success "change classification" "${CHANGES_RESULT}"
           require_success "fleet guard" "${GUARD_RESULT}"
+          require_success "conventional commits" "${COMMITS_RESULT}"
           require_conditional "fleet validation" "${FLEET_REQUIRED}" "${FLEET_RESULT}"
           require_conditional "workflow audit" "${AUDIT_REQUIRED}" "${AUDIT_RESULT}"
+          require_conditional "workflow security audit" "${AUDIT_REQUIRED}" "${ZIZMOR_RESULT}"
 
           exit "${failed}"
