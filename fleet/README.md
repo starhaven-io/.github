@@ -30,7 +30,7 @@ Tier 1:
 | File | Notes |
 |------|-------|
 | `.editorconfig` | all consumers |
-| `.githooks/commit-msg` | DCO hook with fixup/squash/merge skip |
+| `.githooks/commit-msg` | Claude/Codex trailer guard on all commits; DCO hook with fixup/squash/merge skip |
 | `.githooks/pre-push` | deletion-skip, just-guard, `just check` |
 | `CLAUDE.md` | exactly `@AGENTS.md` |
 | `LICENSE` | one canonical file per license type in `fleet/files/licenses/` |

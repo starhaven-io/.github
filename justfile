@@ -23,6 +23,7 @@ check:
     elif ! BUNDLE_GEMFILE=fleet/Gemfile bundle check &>/dev/null; then
         skip fleet-bundle "fleet bundle not installed" "BUNDLE_GEMFILE=fleet/Gemfile bundle install"
     else
+        run commit-msg-hook env BUNDLE_GEMFILE=fleet/Gemfile bundle exec ruby fleet/test/commit_msg_hook_test.rb
         run guard-regressions env BUNDLE_GEMFILE=fleet/Gemfile bundle exec ruby fleet/test/guard_regressions_test.rb
         run rubocop env BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop --config fleet/.rubocop.yml --cache false fleet/
     fi
