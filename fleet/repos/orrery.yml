@@ -6,8 +6,8 @@ params:
     - package-ecosystem: "github-actions"
       group: "github-actions"
       directory: "/"
-    - package-ecosystem: "terraform"
-      group: "terraform"
+    - package-ecosystem: "opentofu"
+      group: "opentofu"
       directories: ["/", "/modules/*"]
   pinprick-audit:
     advanced-security: "false"
@@ -15,5 +15,5 @@ params:
     timeout-minutes: 5
     push-paths: [".github/workflows/**"]
 exceptions:
-  codeql: "terraform-only private infra; tofu.yml owns IaC validation"
+  codeql: "OpenTofu-only private infra; tofu.yml owns IaC validation"
   zizmor: "private repo without GHAS: no SARIF upload; zizmor.yml is a hand-rolled direct gate"
