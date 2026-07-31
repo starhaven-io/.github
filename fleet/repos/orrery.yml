@@ -15,5 +15,5 @@ params:
     timeout-minutes: 5
     push-paths: [".github/workflows/**"]
 exceptions:
-  codeql: "terraform-only private infra; tofu.yml owns IaC validation"
+  codeql: "OpenTofu-only private infra; tofu.yml owns IaC validation"
   zizmor: "private repo without GHAS: no SARIF upload; zizmor.yml is a hand-rolled direct gate"
