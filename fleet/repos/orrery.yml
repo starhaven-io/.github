@@ -6,8 +6,8 @@ params:
     - package-ecosystem: "github-actions"
       group: "github-actions"
       directory: "/"
-    - package-ecosystem: "terraform"
-      group: "terraform"
+    - package-ecosystem: "opentofu"
+      group: "opentofu"
       directories: ["/", "/modules/*"]
   pinprick-audit:
     advanced-security: "false"
