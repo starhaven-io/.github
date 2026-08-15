@@ -1,0 +1,52 @@
+schema: 1
+license: "agpl"
+params:
+  astro-docs: true
+  dependabot:
+    - package-ecosystem: "bundler"
+      group: "bundler-dependencies"
+      directory: "/"
+    - package-ecosystem: "github-actions"
+      group: "github-actions"
+      directory: "/"
+    - package-ecosystem: "npm"
+      group: "npm-dependencies"
+      directory: "/site"
+  npm-policy:
+    projects: ["site"]
+  link-check:
+    targets: "--exclude '^http://localhost:4321/?$' README.md DATA_SOURCES.md seed/README.md"
+    build-site: false
+    authenticated-github: true
+    schedule: "0 14 * * 1"
+    concurrency-group: "link-check"
+  codeql:
+    languages: ["actions", "javascript-typescript", "ruby"]
+    paths:
+      - ".github/workflows/**"
+      - "app/**"
+      - "config/**"
+      - "lib/**"
+      - "research/**"
+      - "site/**"
+      - "slices/**"
+      - "Gemfile"
+      - "Rakefile"
+    runner: "ubuntu-24.04"
+    timeout-minutes: 30
+  pinprick-audit:
+    advanced-security: "${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}"
+    fail-on-findings: true
+  readme:
+    badges:
+      workflow: "ci.yml"
+      extra: []
+    license:
+      text: |-
+        Code is licensed [AGPL-3.0-only](LICENSE). The files under `seed/` are
+        excerpts derived from the
+        [RubyGems.org public data dumps](https://rubygems.org/pages/data),
+        included for reproducibility; rights in the underlying records remain
+        with their owners under RubyGems.org's terms, and rakkan claims no
+        separate license over them (see [seed/README.md](seed/README.md)).
+exceptions: {}
