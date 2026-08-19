@@ -187,6 +187,12 @@ consumer pull request cannot create or change `.fleet.yml`, even when the base
 branch has no copy; this keeps adoption on the same trusted path as later
 configuration changes.
 
+Before enrollment, the consumer preparation pull request must establish
+`.githooks/commit-msg` and `.githooks/pre-push` from `fleet/files/` with mode
+`100755`. The signed `createCommitOnBranch` mutation publishes file contents
+but has no file-mode field, so fleet sync fails closed rather than create a
+non-executable hook or a mode-only empty pull request.
+
 Every tier-2 fence must exist in its host file before the first render can
 succeed; the renderer fails on a missing fence rather than guessing where the
 block belongs. The consumer must carry, empty or populated:
