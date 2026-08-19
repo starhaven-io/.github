@@ -172,6 +172,11 @@ class GoldenRenderTest < Minitest::Test
 
     assert_path_exists File.join(repo_root, ".mcp.json") if params(config)["astro-docs"]
 
+    %w[commit-msg pre-push].each do |hook|
+      assert File.executable?(File.join(repo_root, ".githooks", hook)),
+             ".githooks/#{hook} must render executable for #{name}"
+    end
+
     if params(config)["dependabot"]
       assert_dependabot(repo_root, name, config)
     else

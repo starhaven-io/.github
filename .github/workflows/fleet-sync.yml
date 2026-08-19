@@ -103,7 +103,7 @@ jobs:
         if: ${{ matrix.release_tag_required }}
         run: |
           FLEET_VERSION="$(cat hub/fleet/VERSION)"
-          for ATTEMPT in {1..36}; do
+          for _ in {1..36}; do
             if git -C hub rev-parse --verify --quiet "refs/tags/${FLEET_VERSION}^{commit}" >/dev/null; then
               exit 0
             fi
@@ -164,6 +164,42 @@ jobs:
             cat ../changed-files.txt
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
+
+      - name: Require publishable file modes
+        if: steps.drift.outputs.changed == 'true'
+        working-directory: repo
+        run: |
+          # createCommitOnBranch signs content commits but cannot express Git tree modes.
+          failed=0
+          while IFS= read -r path; do
+            if [ -L "${path}" ]; then
+              echo "::error file=${path}::fleet sync cannot publish a symlink; managed surfaces must be regular files"
+              failed=1
+              continue
+            fi
+
+            if [ -x "${path}" ]; then
+              desired_mode=100755
+            else
+              desired_mode=100644
+            fi
+
+            tracked=$(git --literal-pathspecs ls-files --stage -- "${path}")
+            if [ -z "${tracked}" ]; then
+              if [ "${desired_mode}" != 100644 ]; then
+                echo "::error file=${path}::fleet sync cannot publish a new ${desired_mode} entry; establish its mode before fleet enrollment"
+                failed=1
+              fi
+              continue
+            fi
+
+            read -r tracked_mode _ <<< "${tracked}"
+            if [ "${tracked_mode}" != "${desired_mode}" ]; then
+              echo "::error file=${path}::fleet sync cannot publish mode ${tracked_mode} -> ${desired_mode}; standardize the consumer mode first"
+              failed=1
+            fi
+          done < ../changed-files.txt
+          exit "${failed}"
 
       - name: Mint write token
         id: write-token
