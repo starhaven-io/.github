@@ -28,7 +28,7 @@ jobs:
           persist-credentials: false
 
       - name: Run pinprick
-        uses: starhaven-io/pinprick-action@27422e98d47725851c131ffd98cdf933a7366f8c # v0.5.2
+        uses: starhaven-io/pinprick-action@475e6e84a584bc6d5d6f65958beff2732905f8a3 # v0.5.3
         with:
           # Fork pull requests cannot upload SARIF with the read-only token.
           advanced-security: ${{ inputs.advanced-security }}
