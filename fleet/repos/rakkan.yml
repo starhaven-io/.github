@@ -44,9 +44,9 @@ params:
     license:
       text: |-
         Code is licensed [AGPL-3.0-only](LICENSE). The files under `seed/` are
-        excerpts derived from the
-        [RubyGems.org public data dumps](https://rubygems.org/pages/data),
-        included for reproducibility; rights in the underlying records remain
-        with their owners under RubyGems.org's terms, and rakkan claims no
-        separate license over them (see [seed/README.md](seed/README.md)).
+        excerpts derived from the public data dumps published by the
+        registries rakkan tracks, included for reproducibility; rights in the
+        underlying records remain with their owners under each registry's
+        terms, and rakkan claims no separate license over them (see
+        [seed/README.md](seed/README.md)).
 exceptions: {}
