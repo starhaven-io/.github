@@ -61,7 +61,7 @@ Tier 3 (rendered files and thin callers):
 | `.github/workflows/link-check.yml` | caller of `reusable-link-check.yml` | targets, `build-site`, site directory, schedule |
 | `.github/workflows/codeql.yml` | caller of `reusable-codeql.yml` | languages, paths, runner, build mode and profile |
 | `.github/workflows/fleet-guard.yml` | caller of `reusable-fleet-guard.yml` | none |
-| first-party reusable workflow calls | `uses: starhaven-io/.github/.github/workflows/reusable-*.yml@...` jobs in any workflow | sync keeps the SHA and fleet version comment current; guard prevents consumer PRs from removing established calls |
+| first-party reusable workflow calls | semantic `jobs.<id>.uses` values matching `starhaven-io/.github/.github/workflows/reusable-*.yml@...` | sync keeps the SHA and fleet version comment current; guard prevents consumer PRs from removing established calls |
 
 Tier 4 includes repo-owned `ci.yml` orchestration, release and deploy
 workflows, all AGENTS.md content outside the managed block, README bodies,
@@ -115,6 +115,7 @@ in the hub file and arrive through the fleet sync bot.
 
 ```yaml
 schema: 1
+visibility: "public"
 license: "agpl"
 params:
   renovate: true
@@ -164,9 +165,11 @@ params:
 The recipe renders into a repo-owned `# fleet:block npm-policy` fence in the
 `justfile`, so a consumer must carry that fence before it is enabled, the same
 as the other justfile blocks. The per-package `allowScripts` map in each
-`package.json`, the CI and deploy steps that run the checker before
-`npm ci --strict-allow-scripts`, and the `check` recipe's call stay repo-owned;
-the checker and its recipe are the shared surfaces.
+`package.json` and repo-specific CI and deploy integration stay repo-owned. The
+shared link-check workflow runs the checker against the configured site
+directory before either `npm ci --strict-allow-scripts` path. Configuration
+validation requires every built site directory to be enrolled in
+`npm-policy.projects`.
 
 Exceptions are explicit and cited; a managed surface with an exception entry is
 left untouched by the renderer, so every variant is self-documenting:
@@ -179,6 +182,13 @@ exceptions:
 
 Use `pinprick-audit` for the workflow and `pinprick-audit-recipe` for the
 justfile recipe when only one of those surfaces is exempt.
+
+When a parameter is removed, the renderer compares the prior consumer
+`.fleet.yml` ownership ledger with the desired config. Former whole-file
+surfaces are deleted and former managed blocks are cleared while retaining
+their fences. A newly cited exception deliberately transfers the existing
+surface to repository ownership instead of deleting it. Publication carries
+both additions and deletions in the verified commit.
 
 To adopt a repository, add its name to `fleet/repos.yml` and add its validated
 `fleet/repos/<name>.yml` config in the same hub change. The first sync bot pull
@@ -241,46 +251,88 @@ they are).
 
 Consumer callers pin reusable workflows by hub commit SHA with a fleet version
 comment. The sync is the only writer for fleet pins: every render seeds every
-caller at the current release tag. During the release-push race, consumers
-without tag-bound rendered configuration can fall back to the sync push SHA;
-Renovate-enabled consumers wait for the tag instead. Each release is one PR per
-consumer carrying canon changes and pin movement together. Dependabot ignores
-`starhaven-io/.github` refs entirely and owns third-party dependencies only.
+caller from the authenticated release tag. Publication always starts from the
+trusted default-branch workflow. Current-main code authenticates the release
+and performs a no-write safety preflight against the consumer; the exact tagged
+renderer then applies tagged canon from a separate checkout of the peeled
+release commit. The annotated tag's name, exact annotation,
+peeled commit, embedded `fleet/VERSION`, and identity as the latest first-parent
+`main` commit that changed the version file must agree. Proposed releases remain
+renderable during PR validation, but no consumer write can fall back to an
+untagged or unmerged commit. The preflight bridges current safety checks to the
+tagged renderer's stable command-line interface, so an older authenticated
+release does not need current-main publication helpers and cannot inherit newer
+rendering semantics. Because that bridge evaluates the authenticated release's
+registry, configs, templates, helpers, locals, and surface set with the
+current-main renderer, changes to those interfaces must remain backward
+compatible with the active release. Stage removals across releases: first cut a
+release whose canon no longer consumes the interface while retaining renderer
+support, then remove that support only after the new tag is active. Each release
+is one PR per consumer carrying canon changes and pin movement together.
+Dependabot ignores `starhaven-io/.github` refs entirely and owns third-party
+dependencies only.
 
 Renovate consumers opt in with `params.renovate: true`. The renderer is the sole
 writer for their root `renovate.json`, including the load-bearing Merge
 Confidence opt-out, and pins the shared preset by immutable fleet release tag.
-For Renovate-enabled consumers, the publishing sync waits up to three minutes
-for that tag to resolve before it renders consumer stubs. Ephemeral release-PR
-validation can therefore propose a new version without letting a publishing
-sync reference a tag that does not exist yet.
+The fleet validation workflow uses the exact Renovate version declared in
+`fleet/validator/package.json` for strict, no-global validation of the preset
+and each rendered adopter stub. It actionlints every hub workflow and each
+consumer workflow whose complete contents the fleet renders; unrelated
+repo-owned workflows remain the consumer's own CI responsibility. Ephemeral
+release-PR validation can propose a new version, while publication requires the
+real authenticated tag.
 
-This hub is the seven-day supply-chain quarantine for everything first-party.
-Consumer Dependabot keeps its cooldown for third-party actions and never
-writes fleet pins; upstream changes reach consumers only as fleet releases.
+Consumer Dependabot and the shared Renovate preset enforce the seven-day age
+gate for their eligible third-party updates. Same-organization actions are
+explicitly excluded from Dependabot's cooldown: first-party changes instead
+cross the reviewed, immutable fleet release boundary. Dependabot never writes
+fleet pins.
 
 Fleet releases are cut through `fleet-release.yml`. Manual dispatch opens a
 release PR that bumps `fleet/VERSION` to the next Pacific CalVer tag name. The
-merge to `main` creates an annotated tag for that exact version if it does not
-already exist. Existing tags are never moved. Every VERSION bump is tagged on
-its merge commit; a sync run that cannot resolve the VERSION tag is the release
-push itself. A root `renovate-config.json` change does not trigger fleet sync;
-after it merges, a maintainer must dispatch the release workflow before any
-consumer preset pin moves.
+version parser requires exactly one valid `vYYYY.MM.DD.N` line and monotonic
+progression. Keep the generated release change as one commit and merge it with
+squash. The enforced invariant is that the VERSION change is in the resulting
+`main` tip commit; an annotated tag is created for that exact commit. A rebased
+history fails closed when any later commit separates the VERSION change from
+the tip.
+An existing tag is accepted only when its type, name, annotation, and peeled
+commit match; mismatches fail rather than move the ref. After authentication,
+the release workflow sends a `repository_dispatch` event, which makes the sync
+load its workflow definition from the default branch rather than from the tag.
+A root `renovate-config.json` change enters fleet validation but does not
+publish until a maintainer dispatches the release workflow. Organization tag
+rules should reserve `v*` creation and deletion for the release App.
 
 ## Sync Workflow
 
-`fleet-sync.yml` runs on pushes to `main` touching `fleet/**` or the reusable
-workflows, on a weekly schedule, and by dispatch. Per consumer in
-`fleet/repos.yml` it clones the repo, reads and validates the matching hub
-config, renders `.fleet.yml`, tiers 1 through 3, and first-party reusable
-workflow pins in repo-owned workflows, then diffs against the working tree. If
-anything differs it opens or updates a single PR on branch
+`fleet-sync.yml` runs on a weekly schedule and on the default branch for a
+`fleet-sync` repository dispatch. A scoped manual run can set the dispatch's
+`client_payload.repo` to one name from `fleet/repos.yml`; arbitrary workflow
+refs are intentionally not accepted. Every entry declares validated `public`
+or `private` visibility; pre-merge validation may skip a failed checkout only
+for an explicitly private consumer. The sync authenticates the release tag and
+checks out both current-main tooling and the release snapshot. Current-main
+tooling first performs a no-write render preflight, including path, marker,
+configuration, and release checks. The tagged renderer then applies only tagged
+canon. It clones each consumer, renders `.fleet.yml`, tiers 1 through 3, and
+first-party reusable workflow pins before diffing against the working tree. The
+hub consumer is checked out at the exact `main` commit captured during release
+authentication. Before write credentials are minted, the job intersects the
+tagged render's changed paths with every path changed between the release and
+that captured commit. A disjoint set permits a missed hub self-sync to retry
+after unrelated commits; any overlap fails closed so tagged canon cannot revert
+a newer hub path. Paths remain
+NUL-delimited through mode checks and the GraphQL payload. If anything differs
+it opens or updates a single PR on branch
 `fleet-sync-<version>` titled `chore(fleet): sync managed surfaces <version>`,
-through a verified `createCommitOnBranch` commit; PRs from superseded versions
-are closed by the next sync. The PR body lists each converged surface, and that
-list is the drift alarm. A repo in canon produces no PR; scheduled silence is
-the health signal.
+through a verified `createCommitOnBranch` commit. Update and auto-merge require
+the exact base repository, branch, App author, and returned commit OID; stale
+cleanup uses the same repository, base, author, and reserved-prefix checks. A
+same-named fork PR is never selected. The PR body lists each
+converged or retired surface. A repo in canon produces no PR; scheduled silence
+is the health signal.
 
 ## Pull Request Guard
 
@@ -310,9 +362,13 @@ and in this hub it checks a PR against its own in-tree canon, since a hub PR
 carries the canon it proposes. That hub exemption is enabled only from the
 trusted workflow repository context, not from consumer-provided repo naming.
 Stage two fails only on surfaces the PR itself touched: drift that predates the
-branch belongs to the sync, not to the author. A PR that pairs parameter
+branch belongs to the sync, not to the author. When current hub canon retires a
+managed surface that a consumer still carries, unrelated consumer PRs remain
+unblocked, but a human change or deletion of that retiring surface fails until
+a new fleet release and sync transfer ownership. A PR that pairs parameter
 changes with output rendered under a newer canon than the guard pin may still
-need the fleet pins bumped first; that window closes with the next sync.
+need the fleet pins bumped first; that window also closes only after the canon
+is released and synced.
 
 The in-tree guard is an authoring and drift check. It cannot be the sole
 adversarial control for edits to its own caller workflow, because a
@@ -322,11 +378,15 @@ from a trusted ref.
 
 ## Security Posture
 
-- Hub writes are restricted to collaborator PRs, with org rulesets requiring
-  PRs and blocking force-pushes.
-- A compromised or bad hub `main` cannot silently propagate: consumers
-  reference the hub only through SHA-pinned callers and receive changes only
-  via reviewed PRs, whether Dependabot bumps or fleet-sync convergence.
+- Hub branch, tag, environment, and required-check rules are external
+  prerequisites: this repository cannot prove their live installation. They
+  should require reviewed hub PRs, block force-pushes and tag deletion, reserve
+  `v*` tag creation for the release App, and protect the `starhaven`
+  environment.
+- Hub `main` is a high-trust boundary because its scheduled workflows can mint
+  repository-scoped App tokens. Consumer changes still arrive through signed
+  commits and required-check-gated PRs, but a compromised hub workflow must not
+  be treated as contained by SHA pins alone.
 - The org Actions policy implicitly allows same-org actions and reusable
   workflows; the explicit allowlist is reserved for third-party trust grants.
 - The org-ruleset required guard (`fleet-guard-required.yml`) deliberately

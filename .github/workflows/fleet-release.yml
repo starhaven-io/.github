@@ -44,22 +44,16 @@ jobs:
       - name: Compute next version
         id: version
         env:
-          FLEET_RELEASE_TZ: America/Los_Angeles
+          TZ: America/Los_Angeles
         run: |
-          ruby -e '
-            ENV["TZ"] = ENV.fetch("FLEET_RELEASE_TZ")
-            today = Time.now.strftime("v%Y.%m.%d")
-            tags = `git tag --list "#{today}*"`.lines.map(&:strip)
-            numbers = tags.map do |tag|
-              if tag == today
-                0
-              elsif (match = tag.match(/\A#{Regexp.escape(today)}\.(\d+)\z/))
-                match[1].to_i
-              end
-            end.compact
-            version = "#{today}.#{numbers.empty? ? 1 : numbers.max + 1}"
-            File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |file| file.puts("version=#{version}") }
-          '
+          test "${GITHUB_REF}" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          ruby fleet/version.rb verify-tag \
+            --repository . \
+            --version-file fleet/VERSION \
+            --main-ref HEAD >/dev/null
+          VERSION=$(ruby fleet/version.rb next --version-file fleet/VERSION)
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
       - name: Mint write token
         id: write-token
@@ -91,7 +85,39 @@ jobs:
             echo "Release ${VERSION} of fleet-managed surfaces."
             echo ""
             echo "This bumps fleet/VERSION. The merge to main will create the annotated ${VERSION} tag."
+            echo "Keep this as one commit and merge it with squash so the VERSION-changing commit remains the release tip."
           } > "${BODY_FILE}"
+
+          PULLS_FILE="${RUNNER_TEMP}/fleet-release-open-pulls.json"
+          list_open_pulls() {
+            gh api --paginate "repos/${REPOSITORY}/pulls?state=open&per_page=100" | jq -s 'add' > "${PULLS_FILE}"
+          }
+          verified_pull() {
+            local command=$1
+            local result
+            for attempt in 1 2 3 4 5; do
+              list_open_pulls
+              if result=$(ruby fleet/pr_identity.rb "${command}" \
+                --repository "${REPOSITORY}" \
+                --branch "${BRANCH}" \
+                --base main \
+                --author "${BOT_USER}" \
+                --head-oid "${COMMIT_OID}" < "${PULLS_FILE}"); then
+                printf '%s' "${result}"
+                return 0
+              fi
+              if [ "${attempt}" -eq 5 ]; then
+                return 1
+              fi
+              sleep 2
+            done
+          }
+          list_open_pulls
+          ruby fleet/pr_identity.rb preflight \
+            --repository "${REPOSITORY}" \
+            --branch "${BRANCH}" \
+            --base main \
+            --author "${BOT_USER}" < "${PULLS_FILE}"
 
           if gh api "repos/${REPOSITORY}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
             gh api "repos/${REPOSITORY}/git/refs/heads/${BRANCH}" \
@@ -109,6 +135,7 @@ jobs:
           ADDITIONS=$(jq -n --arg contents "${CONTENT}" '[{ path: "fleet/VERSION", contents: $contents }]')
           COMMIT_BODY="Signed-off-by: ${BOT_USER} <${BOT_EMAIL}>"
 
+          COMMIT_RESPONSE="${RUNNER_TEMP}/fleet-release-commit-response.json"
           jq -n \
             --arg repo "${REPOSITORY}" \
             --arg branch "${BRANCH}" \
@@ -126,23 +153,30 @@ jobs:
                   expectedHeadOid: $head
                 }
               }
-            }' | gh api graphql --input -
+            }' | gh api graphql --input - > "${COMMIT_RESPONSE}"
+          COMMIT_OID=$(jq -er '.data.createCommitOnBranch.commit.oid' "${COMMIT_RESPONSE}")
 
-          OPEN_PR=$(gh pr list \
-            --repo "${REPOSITORY}" \
-            --head "${BRANCH}" \
-            --state open \
-            --json number \
-            --jq '.[0].number // ""')
+          OPEN_PR=$(verified_pull optional)
 
           if [ -n "${OPEN_PR}" ]; then
             gh pr edit "${OPEN_PR}" --repo "${REPOSITORY}" --title "${TITLE}" --body-file "${BODY_FILE}"
           else
-            gh pr create --repo "${REPOSITORY}" --base main --head "${BRANCH}" --title "${TITLE}" --body-file "${BODY_FILE}"
+            jq -n \
+              --arg title "${TITLE}" \
+              --arg head "${REPOSITORY%%/*}:${BRANCH}" \
+              --rawfile body "${BODY_FILE}" \
+              '{ title: $title, head: $head, base: "main", body: $body }' |
+              gh api "repos/${REPOSITORY}/pulls" -X POST --input -
           fi
 
-          gh pr list --repo "${REPOSITORY}" --state open --json number,headRefName \
-            --jq ".[] | select(.headRefName | startswith(\"fleet-release-\")) | select(.headRefName != \"${BRANCH}\") | .number" |
+          verified_pull select >/dev/null
+
+          ruby fleet/pr_identity.rb stale \
+            --repository "${REPOSITORY}" \
+            --prefix "fleet-release-" \
+            --current-branch "${BRANCH}" \
+            --base main \
+            --author "${BOT_USER}" < "${PULLS_FILE}" |
           while IFS= read -r STALE; do
             gh pr close "${STALE}" --repo "${REPOSITORY}" --delete-branch \
               --comment "Superseded by the ${VERSION} release."
@@ -161,12 +195,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          working-directory: fleet
 
       - name: Read version
         id: version
+        env:
+          TZ: America/Los_Angeles
         run: |
-          VERSION="$(cat fleet/VERSION)"
+          VERSION=$(ruby fleet/version.rb verify-transition \
+            --repository . \
+            --commit "${GITHUB_SHA}" \
+            --version-file fleet/VERSION)
           echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
       - name: Mint write token
@@ -185,8 +231,24 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          verify_release_tag() {
+            ref_file="${RUNNER_TEMP}/fleet-release-ref.json"
+            tag_file="${RUNNER_TEMP}/fleet-release-tag.json"
+            gh api "repos/${REPOSITORY}/git/ref/tags/${VERSION}" > "${ref_file}"
+            TAG_SHA=$(jq -er 'select(.object.type == "tag") | .object.sha' "${ref_file}")
+            gh api "repos/${REPOSITORY}/git/tags/${TAG_SHA}" > "${tag_file}"
+            jq -e \
+              --arg version "${VERSION}" \
+              --arg commit "${GITHUB_SHA}" \
+              '.tag == $version and
+               .message == ("Fleet " + $version) and
+               .object.type == "commit" and
+               .object.sha == $commit' "${tag_file}" >/dev/null
+          }
+
           if gh api "repos/${REPOSITORY}/git/ref/tags/${VERSION}" >/dev/null 2>&1; then
-            echo "Tag ${VERSION} already exists."
+            verify_release_tag
+            echo "Authenticated existing tag ${VERSION} at ${GITHUB_SHA}."
             exit 0
           fi
 
@@ -198,7 +260,21 @@ jobs:
             -f "type=commit" \
             --jq .sha)
 
-          gh api "repos/${REPOSITORY}/git/refs" \
+          if ! gh api "repos/${REPOSITORY}/git/refs" \
             -X POST \
             -f "ref=refs/tags/${VERSION}" \
-            -f "sha=${TAG_SHA}"
+            -f "sha=${TAG_SHA}"; then
+            echo "Tag ref creation raced; authenticating the winner."
+          fi
+          verify_release_tag
+
+      - name: Dispatch fleet sync from trusted main
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          jq -n \
+            --arg version "${VERSION}" \
+            '{ event_type: "fleet-sync", client_payload: { version: $version } }' |
+            gh api "repos/${REPOSITORY}/dispatches" -X POST --input -

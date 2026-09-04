@@ -29,9 +29,9 @@ Markdown-only profile repository.
 ## Required checks
 
 - Run `just check` before finishing. It runs git diff hygiene, the fleet test
-  suites under the locked bundle, RuboCop on `fleet/`, a zizmor workflow audit,
-  a pinprick action supply-chain audit, and a lychee link check. Missing local
-  tools count as failures with install hints.
+  suites under the locked bundle, RuboCop on `fleet/`, actionlint, a zizmor
+  workflow audit, a pinprick action supply-chain audit, and a lychee link
+  check. Missing local tools count as failures with install hints.
 - Run `BUNDLE_GEMFILE=fleet/Gemfile bundle install` once per clone so the test
   and lint steps run instead of being skipped.
 - Run `just install-hooks` once per clone so DCO sign-off and pre-push checks
@@ -63,8 +63,8 @@ Top level:
 - `.githooks/`: `commit-msg` (rejects AI attribution trailers, requires DCO
   sign-off) and `pre-push` (`just check`).
 - `lychee.toml`: profile and community-health link-check configuration.
-- `.github/dependabot.yml`: bundler (`/fleet`) and github-actions updates with
-  a 7-day cooldown.
+- `.github/dependabot.yml`: Bundler (`/fleet`), npm (`/fleet/validator`), and
+  GitHub Actions updates with a 7-day cooldown.
 
 `fleet/` (the renderer and its canon):
 
@@ -72,6 +72,8 @@ Top level:
 - `repos.yml` and `repos/<name>.yml`: consumer registry and per-repo config.
 - `files/`, `blocks/`, `templates/`: tier-1 whole files, tier-2 fenced block
   content, and tier-3 ERB templates.
+- `validator/`: the locked Renovate CLI used to validate the shared preset and
+  every rendered adopter stub in CI.
 - `test/`: the commit-msg hook tests, the guard and renderer regression suite,
   the conclusion and conventional-commits workflow contract tests, and
   golden-render tests that render every consumer config into a synthetic
@@ -83,13 +85,15 @@ Top level:
 - `conclusion.yml`: the required PR check. It classifies changed paths, fans
   out to the fleet guard, conventional commits, `fleet-validate.yml`, and the
   workflow audits, and requires every relevant result.
-- `fleet-validate.yml`: renderer syntax, tests, and lint, plus a per-consumer
-  dry-run render with an idempotence check.
+- `fleet-validate.yml`: renderer syntax, tests, lint, and actionlint, plus a
+  per-consumer dry-run render with an idempotence check.
 - `fleet-guard.yml`: this repo's own rendered guard caller.
 - `fleet-guard-required.yml`: run from `@main` by an org ruleset against
   consumer PRs; skips the hub itself.
-- `fleet-sync.yml`: renders consumers and opens verified sync PRs using App
-  credentials (push to `main`, weekly cron, dispatch).
+- `fleet-sync.yml`: runs from trusted `main`, authenticates and executes the
+  tagged renderer and canon, and opens verified sync PRs using App credentials
+  (weekly cron or repository dispatch). Hub retries use the captured `main`
+  commit and reject any tagged-render path changed since the release.
 - `fleet-release.yml`: dispatch opens a `fleet/VERSION` bump PR; the merge to
   `main` tags that version.
 - `codeql.yml`, `zizmor.yml`, `pinprick-audit.yml`, `link-check.yml`,
@@ -119,18 +123,20 @@ consumers only through reviewed pin changes. Two consequences:
 - Merge and validate the preset first, then cut a fleet release before
   finalizing any consumer's `renovate.json`. A consumer must never reference a
   tag that does not contain the preset.
-- `just check` does not validate Renovate configuration. Before merging a preset
-  change, run `renovate-config-validator --strict --no-global
-  renovate-config.json` with an explicit, reviewed Renovate version. Validate
-  each consumer stub separately. For extraction tests, copy the preset over the
-  stub in a disposable checkout because Renovate's local platform cannot resolve
-  `local>` presets.
+- `just check` does not download Renovate. `fleet-validate.yml` uses the exact
+  Renovate version declared in `fleet/validator/package.json` and validates the
+  preset and each rendered adopter stub with
+  `renovate-config-validator --strict --no-global`. Before merging a preset
+  change, run the same command locally with that reviewed version. For
+  extraction tests, copy the preset over the stub in a disposable checkout
+  because Renovate's local platform cannot resolve `local>` presets.
 
 Consumers opt in through `params.renovate: true` in their
 `fleet/repos/<name>.yml`; the renderer then owns the root `renovate.json` as a
-tier-3 file and pins the preset to the current immutable fleet release. For
-Renovate-enabled consumers, the publishing sync waits up to three minutes for
-that release tag to resolve before it can open a consumer PR. The consumer-level
+tier-3 file and pins the preset to the current immutable fleet release. The
+publishing sync runs from trusted `main`, renders every consumer from the
+authenticated tag snapshot, and fails if the tag identity, ancestry, or commit
+does not match. The consumer-level
 `ignorePresets` entry is the load-bearing opt-out from the Mend-hosted Merge
 Confidence preset; retain it in the rendered stub.
 
@@ -185,6 +191,10 @@ regex manager can see them.
     triggers, and keep `persist-credentials: false` on checkouts. A reusable
     workflow may omit `permissions` only to inherit the caller's grant, with
     the reason stated in the file. zizmor and pinprick stay at zero findings.
+13. Current-main publication preflights the active release's canon. Keep
+    renderer/template interfaces backward-compatible with that tag; stage a
+    removal by first releasing canon that no longer consumes the interface,
+    then remove renderer support only after that release is active.
 
 <!-- fleet:block commit-and-pr-conventions -->
 

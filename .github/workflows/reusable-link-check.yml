@@ -40,6 +40,12 @@ jobs:
           node-version: 26
           package-manager-cache: false
 
+      - name: Validate npm install policy
+        if: inputs.build-site
+        env:
+          SITE_DIRECTORY: ${{ inputs.site-directory }}
+        run: node scripts/check-npm-install-policy.mjs "${SITE_DIRECTORY:-.}"
+
       - name: Install dependencies
         if: inputs.build-site && inputs.site-directory == ''
         # Fail closed on unreviewed install scripts (npm v12 default; see allowScripts in package.json).

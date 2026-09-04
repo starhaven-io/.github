@@ -28,3 +28,13 @@ updates:
       "github-actions":
         patterns:
           - "*"
+  - package-ecosystem: "npm"
+    directory: "/fleet/validator"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 7
+    groups:
+      "fleet-validator-dependencies":
+        patterns:
+          - "*"

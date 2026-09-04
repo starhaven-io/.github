@@ -6,6 +6,7 @@ require "open3"
 require "tmpdir"
 require "yaml"
 require "minitest/autorun"
+require_relative "../version"
 
 # Renders every fleet/repos/*.yml into a synthetic consumer skeleton and
 # asserts the output shape. This is the only pre-merge coverage possible for
@@ -25,6 +26,8 @@ module GoldenHelpers
     "terraform" => "terraform"
   }.freeze
   FLEET_PIN_IGNORE = "starhaven-io/.github/*"
+  ACTIONLINT_IGNORE = 'reusable workflow call "\$/\.github/workflows/' \
+                      '(reusable-conventional-commits|fleet-validate|reusable-zizmor)\.yml"'
   REUSABLE_USES_PATTERN = %r{
     uses:\s*"?
     (starhaven-io/\.github/\.github/workflows/reusable-[A-Za-z0-9_.-]+\.ya?ml)
@@ -44,6 +47,20 @@ module GoldenHelpers
 
   def repo_config(name)
     YAML.safe_load_file(File.join(ROOT, "fleet/repos/#{name}.yml"), permitted_classes: [], aliases: false)
+  end
+
+  def latest_release_tag
+    stdout, stderr, status = Open3.capture3("git", "-C", ROOT, "tag", "--merged", "HEAD", "--list", "v*")
+    raise "could not enumerate fleet release tags: #{stderr}" unless status.success?
+
+    versions = stdout.lines.filter_map do |line|
+      FleetVersion.parse(line.strip)
+    rescue FleetVersion::Error
+      nil
+    end
+    raise "no CalVer fleet release tag is reachable from HEAD" if versions.empty?
+
+    versions.max.text
   end
 
   def render(repo_root, name)
@@ -118,6 +135,49 @@ class GoldenRenderTest < Minitest::Test
     end
   end
 
+  def test_current_renderer_preflights_latest_release_templates
+    workspace = Dir.mktmpdir("active-release-", GOLDEN_TMPDIR)
+    release_root = File.join(workspace, "hub")
+    release_tag = latest_release_tag
+    stdout, stderr, status = Open3.capture3(
+      "git", "clone", "--quiet", "--branch", release_tag, "--single-branch", ROOT, release_root
+    )
+    assert status.success?, "could not check out #{release_tag}:\n#{stdout}#{stderr}"
+    release_sha = Open3.capture2("git", "-C", release_root, "rev-parse", "HEAD").first.strip
+    release_repos = YAML.safe_load_file(
+      File.join(release_root, "fleet/repos.yml"), permitted_classes: [], aliases: false
+    ).fetch("repos")
+
+    release_repos.each do |name|
+      repo_root = File.join(workspace, "consumer-#{name}")
+      FileUtils.mkdir_p(repo_root)
+      write_skeleton(repo_root, name)
+      tagged_arguments = [
+        "ruby", "-rpathname", File.join(release_root, "fleet/sync.rb"),
+        "--hub-root", release_root,
+        "--repo-root", repo_root,
+        "--repo-name", name
+      ]
+      tagged_arguments << "--hub" if name == ".github"
+      stdout, stderr, status = Open3.capture3(*tagged_arguments)
+      assert status.success?, "#{release_tag} could not seed #{name}:\n#{stdout}#{stderr}"
+
+      arguments = [
+        "ruby", "-rpathname", File.join(ROOT, "fleet/sync.rb"),
+        "--hub-root", release_root,
+        "--repo-root", repo_root,
+        "--repo-name", name,
+        "--publish",
+        "--publication-preflight",
+        "--main-ref", release_sha
+      ]
+      arguments << "--hub" if name == ".github"
+      stdout, stderr, status = Open3.capture3(*arguments)
+
+      assert status.success?, "current renderer cannot preflight #{release_tag} for #{name}:\n#{stdout}#{stderr}"
+    end
+  end
+
   def assert_golden_render(name)
     repo_root = File.join(GOLDEN_TMPDIR, "consumer-#{name}")
     FileUtils.mkdir_p(repo_root)
@@ -130,8 +190,10 @@ class GoldenRenderTest < Minitest::Test
     assert status.success?, "render is not idempotent for #{name}:\n#{output}"
 
     config = repo_config(name)
+    assert_includes %w[public private], config.fetch("visibility")
     assert_rendered_inventory(repo_root, name, config)
     assert_workflow_shapes(repo_root, name, config)
+    assert_actionlint(repo_root, name)
   end
 
   private
@@ -193,12 +255,20 @@ class GoldenRenderTest < Minitest::Test
   end
 
   def assert_renovate(repo_root, name)
-    rendered = JSON.parse(File.read(File.join(repo_root, "renovate.json")))
+    path = File.join(repo_root, "renovate.json")
+    rendered = JSON.parse(File.read(path))
     assert_equal ["local>starhaven-io/.github:renovate-config##{fleet_version}"],
                  rendered.fetch("extends"),
                  "renovate preset must pin the current fleet release for #{name}"
     assert_equal ["mergeConfidence:all-badges"], rendered.fetch("ignorePresets"),
                  "renovate stub must retain the Merge Confidence opt-out for #{name}"
+
+    validator = ENV.fetch("FLEET_RENOVATE_VALIDATOR", "")
+    return if validator.empty?
+
+    assert File.executable?(validator), "configured Renovate validator is not executable: #{validator}"
+    output, status = Open3.capture2e(validator, "--strict", "--no-global", path)
+    assert status.success?, "Renovate validation failed for #{name}:\n#{output}"
   end
 
   def assert_dependabot(repo_root, name, config)
@@ -305,6 +375,19 @@ class GoldenRenderTest < Minitest::Test
     assert_codeql(repo_root, name, config)
     assert_zizmor(repo_root, name, config)
     assert_pinprick(repo_root, name, config)
+  end
+
+  def assert_actionlint(repo_root, name)
+    available = ENV.fetch("PATH").split(File::PATH_SEPARATOR).any? do |directory|
+      File.executable?(File.join(directory, "actionlint"))
+    end
+    return unless available
+
+    workflows = Dir.glob(File.join(repo_root, ".github/workflows/*.{yml,yaml}"))
+    output, status = Open3.capture2e(
+      "actionlint", "-ignore", ACTIONLINT_IGNORE, *workflows
+    )
+    assert status.success?, "actionlint failed for #{name}:\n#{output}"
   end
 
   def assert_link_check(repo_root, name, config)

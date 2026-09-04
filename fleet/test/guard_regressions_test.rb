@@ -409,6 +409,36 @@ class GuardRegressionsTest < Minitest::Test
     )
   end
 
+  def test_publication_preflight_validates_drift_without_writing
+    hub = scenario("publication-preflight-hub")
+    consumer = scenario("publication-preflight-consumer")
+    version = "v2026.08.24.1"
+    File.write(File.join(hub, "fleet/VERSION"), "#{version}\n")
+    commit_all(hub, "advance fleet version")
+    git(hub, "-c", "user.name=Fleet Guard Regression", "-c", "user.email=fleet@example.invalid",
+        "tag", "-a", version, "-m", "Fleet #{version}")
+    release_sha = git(hub, "rev-parse", "HEAD").stdout.strip
+
+    path = File.join(consumer, ".github/dependabot.yml")
+    drifted = "#{File.read(path)}# retained publication drift\n"
+    File.write(path, drifted)
+
+    result = run_command(
+      ROOT,
+      "ruby", File.join(ROOT, "fleet/sync.rb"),
+      "--hub-root", hub,
+      "--repo-root", consumer,
+      "--repo-name", ".github",
+      "--hub",
+      "--publish",
+      "--publication-preflight",
+      "--main-ref", release_sha
+    )
+
+    assert_sync_success(result)
+    assert_equal drifted, File.read(path)
+  end
+
   def test_rejects_unknown_dependabot_ignore_key
     repo = scenario("unknown-dependabot-ignore-key")
     config = fleet_config(repo)
@@ -514,6 +544,28 @@ class GuardRegressionsTest < Minitest::Test
     assert_sync_success(guard(repo))
   end
 
+  def test_lists_only_fully_rendered_workflows
+    repo = scenario("list-managed-workflows")
+    write_ci_workflow(repo, reusable_workflow_line(repo))
+    File.write(File.join(repo, ".github/workflows/self-test.yml"), <<~YAML)
+      name: Self Test
+      on: [push]
+      permissions: {}
+      jobs:
+        test:
+          runs-on: ubuntu-24.04
+          steps:
+            - run: true
+    YAML
+
+    result = sync(repo, "--list-managed-workflows")
+
+    assert_sync_success(result)
+    refute_includes result.stdout.lines.map(&:chomp), ".github/workflows/ci.yml"
+    assert_includes result.stdout.lines.map(&:chomp), ".github/workflows/fleet-guard.yml"
+    refute_includes result.stdout.lines.map(&:chomp), ".github/workflows/self-test.yml"
+  end
+
   def test_rejects_stale_reusable_pin_edits
     repo = scenario("stale-reusable-pin-edit")
     write_ci_workflow(repo, reusable_workflow_line(repo))
@@ -576,6 +628,46 @@ class GuardRegressionsTest < Minitest::Test
     result = consumer_guard(repo)
     assert_rejects(["guard", result, "reusable workflow declassification rejected"])
     assert_includes result.output, ".github/workflows/ci.yml: reusable-conventional-commits.yml (1 -> 0)"
+  end
+
+  def test_non_job_uses_value_cannot_replace_a_reusable_workflow_call
+    repo = scenario("reusable-workflow-non-call-substitution")
+    write_ci_workflow(repo, reusable_workflow_line(repo))
+    commit_all(repo, "add reusable workflow call")
+
+    disguised = "starhaven-io/.github/.github/workflows/reusable-conventional-commits.yml@#{fleet_ref(repo)}"
+    File.write(File.join(repo, ".github/workflows/ci.yml"), <<~YAML)
+      name: CI
+      on:
+        pull_request:
+      permissions: {}
+      env:
+        COPIED_USES_VALUE: "#{disguised}"
+      jobs:
+        ordinary:
+          runs-on: ubuntu-latest
+          steps:
+            - run: "true"
+    YAML
+    commit_all(repo, "replace call with non-call value")
+
+    assert_rejects(["guard", consumer_guard(repo), "reusable workflow declassification rejected"])
+  end
+
+  def test_rejects_nonportable_workflow_filenames
+    repo = scenario("nonportable-workflow-filenames")
+    File.write(File.join(repo, ".github/workflows/policy:extra.yml"), "name: Invalid\n")
+    commit_all(repo, "add colon workflow")
+
+    assert_rejects(["guard", guard(repo), "portable .yml or .yaml filename"])
+  end
+
+  def test_rejects_control_characters_in_workflow_filenames
+    repo = scenario("control-workflow-filename")
+    File.write(File.join(repo, ".github/workflows/policy\nextra.yml"), "name: Invalid\n")
+    commit_all(repo, "add newline workflow")
+
+    assert_rejects(["guard", guard(repo), "portable .yml or .yaml filename"])
   end
 
   def test_allows_hub_to_remove_reusable_workflow_calls
@@ -726,10 +818,35 @@ class GuardRegressionsTest < Minitest::Test
                   .fetch("commits")
                   .fetch("uses")
     assert_equal expected, decoded
-    assert_sync_success(sync(repo, "--check"))
+    assert_rejects(["renderer", sync(repo, "--check"), "hidden reusable workflow pin rejected"])
     commit_all(repo, "add escaped reusable pin")
 
     assert_rejects(["guard", guard(repo), "hidden reusable workflow pin rejected"])
+  end
+
+  def test_rejects_duplicate_job_id_that_overrides_a_counted_reusable_call
+    repo = scenario("duplicate-job-id")
+    path = File.join(repo, ".github/workflows/ci.yml")
+    call = reusable_workflow_line(repo).strip
+    File.write(path, <<~YAML)
+      name: CI
+
+      on:
+        pull_request:
+
+      permissions: {}
+
+      jobs:
+        commits:
+          #{call}
+        commits:
+          runs-on: ubuntu-slim
+          steps:
+            - run: echo bypassed
+    YAML
+    commit_all(repo, "duplicate effective job")
+
+    assert_rejects(["guard", guard(repo), "workflow YAML contains duplicate job IDs: commits"])
   end
 
   def test_allows_single_line_quoted_canonical_reusable_pin
@@ -892,6 +1009,35 @@ class GuardRegressionsTest < Minitest::Test
     assert_rejects(["guard", guard(repo), "has symlinked workflow ancestor .github/workflows"])
   end
 
+  def test_rejects_symlinked_non_workflow_managed_parent
+    repo = scenario("symlinked-hook-directory")
+    hooks = File.join(repo, ".githooks")
+    real = File.join(repo, ".githooks-real")
+    FileUtils.mv(hooks, real)
+    File.symlink(".githooks-real", hooks)
+    commit_all(repo, "symlink hook directory")
+
+    assert_rejects(
+      ["guard", guard(repo), "symlinked ancestor .githooks"],
+      ["--check", sync(repo, "--check"), "symlinked ancestor .githooks"]
+    )
+  end
+
+  def test_rejects_symlinked_scripts_parent
+    repo = scenario("symlinked-scripts-directory")
+    enable_npm_policy(repo, ["."])
+    assert_sync_success(sync(repo))
+    commit_all(repo, "enable npm policy")
+
+    scripts = File.join(repo, "scripts")
+    real = File.join(repo, "scripts-real")
+    FileUtils.mv(scripts, real)
+    File.symlink("scripts-real", scripts)
+    commit_all(repo, "symlink scripts directory")
+
+    assert_rejects(["--check", sync(repo, "--check"), "symlinked ancestor scripts"])
+  end
+
   def test_rejects_outside_glob_symlinked_reusable_workflow
     repo = scenario("outside-glob-symlinked-workflow")
     write_ci_workflow(repo, reusable_workflow_line(repo))
@@ -1007,6 +1153,231 @@ class GuardRegressionsTest < Minitest::Test
       ["--check", sync(repo, "--check"), "fleet sync drift detected"]
     )
   end
+
+  def test_removes_stale_whole_file_when_parameter_is_disabled
+    repo = scenario("retire-dependabot")
+    config = fleet_config(repo)
+    config.fetch("params").delete("dependabot")
+    write_fleet_config(repo, config)
+
+    assert_rejects(["--check", sync(repo, "--check"), ".github/dependabot.yml"])
+    assert_sync_success(sync(repo))
+    refute_path_exists File.join(repo, ".github/dependabot.yml")
+    assert_sync_success(sync(repo, "--check"))
+  end
+
+  def test_repairs_prior_config_that_uses_a_retired_semantic_value
+    repo = scenario("repair-legacy-prior-config")
+    prior = YAML.safe_load_file(rendered_fleet_config_path(repo), permitted_classes: [], aliases: false)
+    prior.fetch("params").fetch("codeql")["timeout-minutes"] = 0
+    prior.fetch("params")["retired-option"] = { "timeout-minutes" => 0 }
+    write_rendered_fleet_config(repo, prior)
+
+    assert_sync_success(sync(repo))
+    assert_equal File.read(fleet_config_path(repo)), File.read(rendered_fleet_config_path(repo))
+    assert_sync_success(sync(repo, "--check"))
+  end
+
+  def test_rejects_invalid_ownership_fields_in_prior_config
+    cases = {
+      "dependabot" => ->(config) { config.fetch("params")["dependabot"] = {} },
+      "link-check" => ->(config) { config.fetch("params")["link-check"] = {} },
+      "npm-policy" => ->(config) { config.fetch("params")["npm-policy"] = {} },
+      "codeql" => ->(config) { config.fetch("params")["codeql"] = { "languages" => [] } },
+      "readme license" => ->(config) { config.fetch("params")["readme"] = { "license" => [] } }
+    }
+
+    cases.each do |label, mutate|
+      repo = scenario("invalid-prior-ownership-#{label.tr(" ", "-")}")
+      prior = YAML.safe_load_file(rendered_fleet_config_path(repo), permitted_classes: [], aliases: false)
+      mutate.call(prior)
+      write_rendered_fleet_config(repo, prior)
+
+      result = sync(repo)
+
+      refute result.success?, "#{label} unexpectedly accepted:\n#{result.output}"
+      assert_includes result.output, "existing .fleet.yml params"
+    end
+  end
+
+  def test_allows_unrelated_consumer_change_during_managed_surface_retirement
+    hub = scenario("declassification-unrelated-hub")
+    consumer = scenario("declassification-unrelated-consumer")
+    config = fleet_config(hub)
+    config.fetch("params").delete("dependabot")
+    write_fleet_config(hub, config)
+    File.open(File.join(consumer, "SECURITY.md"), "a") { |file| file.puts("\nUnrelated clarification.") }
+    commit_all(consumer, "edit unrelated policy")
+
+    result = run_command(
+      consumer,
+      *SYNC,
+      "--hub-root", hub,
+      "--repo-root", consumer,
+      "--repo-name", ".github",
+      "--guard", "HEAD~1"
+    )
+
+    assert_sync_success(result)
+  end
+
+  def test_rejects_consumer_edit_to_surface_awaiting_retirement
+    hub = scenario("declassification-edit-hub")
+    consumer = scenario("declassification-edit-consumer")
+    config = fleet_config(hub)
+    config.fetch("params").delete("dependabot")
+    write_fleet_config(hub, config)
+    File.open(File.join(consumer, ".github/dependabot.yml"), "a") { |file| file.puts("# consumer edit") }
+    commit_all(consumer, "edit retiring managed surface")
+
+    result = run_command(
+      consumer,
+      *SYNC,
+      "--hub-root", hub,
+      "--repo-root", consumer,
+      "--repo-name", ".github",
+      "--guard", "HEAD~1"
+    )
+
+    assert_rejects(["guard", result, "managed surface declassification rejected"])
+  end
+
+  def test_rejects_consumer_deletion_of_surface_awaiting_retirement
+    hub = scenario("declassification-delete-hub")
+    consumer = scenario("declassification-delete-consumer")
+    config = fleet_config(hub)
+    config.fetch("params").delete("dependabot")
+    write_fleet_config(hub, config)
+    FileUtils.rm_f(File.join(consumer, ".github/dependabot.yml"))
+    commit_all(consumer, "delete retiring managed surface")
+
+    result = run_command(
+      consumer,
+      *SYNC,
+      "--hub-root", hub,
+      "--repo-root", consumer,
+      "--repo-name", ".github",
+      "--guard", "HEAD~1"
+    )
+
+    assert_rejects(["guard", result, "managed surface declassification rejected"])
+  end
+
+  def test_rejects_duplicate_marker_for_surface_awaiting_retirement
+    hub = scenario("declassification-duplicate-block-hub")
+    consumer = scenario("declassification-duplicate-block-consumer")
+    config = fleet_config(hub)
+    config.fetch("params").fetch("readme").delete("license")
+    write_fleet_config(hub, config)
+    duplicate_block(
+      consumer,
+      "README.md",
+      /^<!-- fleet:block license-section -->\n.*?^<!-- fleet:end -->/m,
+      "community metadata repository is licensed",
+      "community metadata repository is licensed"
+    )
+    commit_all(consumer, "duplicate retiring managed block")
+
+    result = run_command(
+      consumer,
+      *SYNC,
+      "--hub-root", hub,
+      "--repo-root", consumer,
+      "--repo-name", ".github",
+      "--guard", "HEAD~1"
+    )
+
+    assert_rejects(["guard", result, "has 2 'license-section' fleet:block markers"])
+  end
+
+  def test_clears_stale_managed_block_when_parameter_is_disabled
+    repo = scenario("retire-readme-license")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("readme").delete("license")
+    write_fleet_config(repo, config)
+
+    assert_sync_success(sync(repo))
+    readme = File.read(File.join(repo, "README.md"))
+    assert_includes readme, "<!-- fleet:block license-section -->\n<!-- fleet:end -->"
+    refute_includes readme, "community metadata repository is licensed"
+  end
+
+  def test_rejects_duplicate_block_while_retiring_its_surface
+    repo = scenario("retire-duplicate-readme-license")
+    duplicate_block(
+      repo,
+      "README.md",
+      /^<!-- fleet:block license-section -->\n.*?^<!-- fleet:end -->/m,
+      "community metadata repository is licensed",
+      "duplicate retired content"
+    )
+    config = fleet_config(repo)
+    config.fetch("params").fetch("readme").delete("license")
+    write_fleet_config(repo, config)
+
+    assert_rejects(["sync", sync(repo), "has 2 'license-section' fleet:block markers"])
+  end
+
+  def test_rejects_missing_fence_while_retiring_its_surface
+    repo = scenario("retire-unfenced-readme-license")
+    path = File.join(repo, "README.md")
+    text = File.read(path)
+    marker = /^<!-- fleet:block license-section -->\n.*?^<!-- fleet:end -->/m
+    block = text.match(marker).to_s
+    unfenced_body = block.lines.reject { |line| line.start_with?("<!-- fleet:") }.join
+    File.write(path, text.sub(block, unfenced_body))
+    config = fleet_config(repo)
+    config.fetch("params").fetch("readme").delete("license")
+    write_fleet_config(repo, config)
+
+    assert_rejects(
+      ["sync", sync(repo), "README.md is missing fleet:block license-section required for retirement"]
+    )
+  end
+
+  def test_rejects_invalid_semantic_configuration_values
+    repo = scenario("invalid-semantic-config")
+    original = fleet_config(repo)
+    cases = {
+      "negative timeout" => lambda do |config|
+        config.fetch("params").fetch("codeql")["timeout-minutes"] = -1
+      end,
+      "invalid cron" => lambda do |config|
+        config.fetch("params").fetch("link-check")["schedule"] = "99 99 * * *"
+      end,
+      "cron with an empty comma item" => lambda do |config|
+        config.fetch("params").fetch("link-check")["schedule"] = "1, 0 * * *"
+      end,
+      "blank exception rationale" => lambda do |config|
+        config["exceptions"]["audit"] = "   "
+      end,
+      "unsafe npm project" => lambda do |config|
+        config.fetch("params")["npm-policy"] = { "projects" => ["../outside"] }
+      end,
+      "missing dependabot directory" => lambda do |config|
+        config.fetch("params").fetch("dependabot").first.delete("directory")
+      end,
+      "non-normal Dependabot directory" => lambda do |config|
+        config.fetch("params").fetch("dependabot").first["directory"] = "/fleet/"
+      end,
+      "duplicate dependabot target" => lambda do |config|
+        config.fetch("params").fetch("dependabot") << {
+          "package-ecosystem" => "bundler",
+          "directories" => ["/fleet"]
+        }
+      end,
+      "site build without npm policy" => lambda do |config|
+        config.fetch("params").fetch("link-check")["build-site"] = true
+      end
+    }
+
+    cases.each do |label, mutate|
+      config = Marshal.load(Marshal.dump(original))
+      mutate.call(config)
+      write_fleet_config(repo, config)
+      refute sync(repo, "--validate-only").success?, label
+    end
+  end
 end
 
 class ConventionalCommitsContractTest < Minitest::Test
@@ -1099,7 +1470,7 @@ class ConclusionContractTest < Minitest::Test
 
     commits = @jobs.fetch("commits")
     refute commits.key?("if")
-    assert_equal "./.github/workflows/reusable-conventional-commits.yml", commits.fetch("uses")
+    assert_equal "$/.github/workflows/reusable-conventional-commits.yml", commits.fetch("uses")
 
     conclusion = @jobs.fetch("conclusion")
     assert_equal "conclusion", conclusion.fetch("name")
@@ -1177,8 +1548,9 @@ class ConclusionContractTest < Minitest::Test
       { "audit" => "false", "fleet" => "true" },
       classify("fleet/templates/fleet-guard.yml.erb")
     )
+    assert_equal({ "audit" => "false", "fleet" => "true" }, classify("renovate-config.json"))
     assert_equal "needs.changes.outputs.fleet == 'true'", @jobs.fetch("fleet").fetch("if")
-    assert_equal "./.github/workflows/fleet-validate.yml", @jobs.fetch("fleet").fetch("uses")
+    assert_equal "$/.github/workflows/fleet-validate.yml", @jobs.fetch("fleet").fetch("uses")
 
     assert_conclusion_failure(
       "FLEET_REQUIRED" => "true",
@@ -1226,7 +1598,7 @@ class ConclusionContractTest < Minitest::Test
   def test_workflow_security_audit_gates_at_pull_request_time
     zizmor = @jobs.fetch("zizmor")
     assert_equal "needs.changes.outputs.audit == 'true'", zizmor.fetch("if")
-    assert_equal "./.github/workflows/reusable-zizmor.yml", zizmor.fetch("uses")
+    assert_equal "$/.github/workflows/reusable-zizmor.yml", zizmor.fetch("uses")
     assert_equal({ "contents" => "read" }, zizmor.fetch("permissions"))
     assert_equal false, zizmor.fetch("with").fetch("advanced-security")
 

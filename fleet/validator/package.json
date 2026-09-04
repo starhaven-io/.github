@@ -1,0 +1,10 @@
+{
+  "name": "@starhaven-io/fleet-validator",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Locked JavaScript tooling used only by fleet validation",
+  "license": "MIT",
+  "devDependencies": {
+    "renovate": "44.59.3"
+  }
+}

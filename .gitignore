@@ -9,3 +9,4 @@
 # Bundler installs for the fleet renderer toolchain
 fleet/vendor/
 fleet/.bundle/
+fleet/validator/node_modules/

@@ -46,6 +46,7 @@ jobs:
           while IFS= read -r -d '' path; do
             case "${path}" in
               fleet/* | \
+              renovate-config.json | \
               .github/workflows/conclusion.yml | \
               .github/workflows/fleet-release.yml | \
               .github/workflows/fleet-sync.yml | \
@@ -82,7 +83,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read # required to read PR titles
-    uses: ./.github/workflows/reusable-conventional-commits.yml
+    uses: $/.github/workflows/reusable-conventional-commits.yml
 
   fleet:
     name: Fleet validate
@@ -90,7 +91,7 @@ jobs:
     if: needs.changes.outputs.fleet == 'true'
     permissions:
       contents: read
-    uses: ./.github/workflows/fleet-validate.yml
+    uses: $/.github/workflows/fleet-validate.yml
 
   audit:
     name: Workflow audit
@@ -111,7 +112,7 @@ jobs:
       contents: read
     # The local form runs the PR's own canon; the pull_request token cannot
     # upload SARIF, so the audit gates directly instead.
-    uses: ./.github/workflows/reusable-zizmor.yml
+    uses: $/.github/workflows/reusable-zizmor.yml
     with:
       advanced-security: false
 
