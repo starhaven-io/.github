@@ -50,8 +50,12 @@ class FleetSyncWorkflowTest < Minitest::Test
   include FleetSyncWorkflowHelpers
 
   def setup
-    workflow = YAML.safe_load_file(WORKFLOW, permitted_classes: [], aliases: false)
-    @steps = workflow.fetch("jobs").fetch("sync").fetch("steps")
+    @workflow = YAML.safe_load_file(WORKFLOW, permitted_classes: [], aliases: false)
+    @steps = @workflow.fetch("jobs").fetch("sync").fetch("steps")
+  end
+
+  def test_release_date_policy_uses_pacific_time_everywhere
+    assert_equal "America/Los_Angeles", @workflow.fetch("env").fetch("TZ")
   end
 
   def test_rejects_tracked_mode_only_drift
@@ -125,10 +129,34 @@ class FleetSyncWorkflowTest < Minitest::Test
     assert_includes result.output, "cannot publish a symlink"
   end
 
+  def test_accepts_deletions_in_nul_delimited_manifest
+    repo = committed_repo("retired.yml")
+    File.unlink(File.join(repo, "retired.yml"))
+
+    result = run_publishability_check(repo, "retired.yml")
+
+    assert result.success?, result.output
+  end
+
+  def test_publication_binds_pull_request_to_commit_and_app_identity
+    publication = @steps.find { |step| step["name"] == "Create verified sync commit and open PR" }.fetch("run")
+
+    assert_includes publication, "COMMIT_OID=$(jq -er"
+    assert_includes publication, "pr_identity.rb preflight"
+    assert_includes publication, "verified_pull select"
+    assert_includes publication, '--head-oid "${COMMIT_OID}"'
+    assert_includes publication, '--match-head-commit "${COMMIT_OID}"'
+    assert_includes publication, 'gh api "repos/${REPOSITORY}/pulls" -X POST --input -'
+    assert_operator publication.index("pr_identity.rb preflight"), :<,
+                    publication.index("git/ref/heads/${BRANCH}")
+    refute_includes publication, "gh pr list"
+    refute_includes publication, "gh pr create"
+  end
+
   private
 
   def run_publishability_check(repo, path)
-    File.write(File.join(File.dirname(repo), "changed-files.txt"), "#{path}\n")
+    File.binwrite(File.join(File.dirname(repo), "changed-files.nul"), "#{path}\0")
     stdout, stderr, status = Open3.capture3(
       "bash", "-euo", "pipefail", "-c", publishability_script,
       chdir: repo

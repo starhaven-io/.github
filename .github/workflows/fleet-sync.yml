@@ -1,22 +1,15 @@
 name: Fleet Sync
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "fleet/**"
-      - ".github/workflows/reusable-*.yml"
+  repository_dispatch:
+    types: [fleet-sync]
   schedule:
     - cron: "17 16 * * 1"
-  workflow_dispatch:
-    inputs:
-      repo:
-        description: "Optional single repository name from fleet/repos.yml"
-        required: false
-        type: string
 
 permissions: {}
+
+env:
+  TZ: America/Los_Angeles
 
 defaults:
   run:
@@ -34,10 +27,16 @@ jobs:
     permissions:
       contents: read
     outputs:
+      hub-sha: ${{ steps.release.outputs.hub-sha }}
+      main-sha: ${{ steps.release.outputs.main-sha }}
       matrix: ${{ steps.repos.outputs.matrix }}
+      version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout trusted main tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
 
       - name: Set up Ruby
@@ -45,28 +44,63 @@ jobs:
         with:
           working-directory: fleet
 
+      - name: Authenticate release source
+        id: release
+        env:
+          EXPECTED_VERSION: ${{ github.event.client_payload.version || '' }}
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/main"
+          MAIN_SHA=$(git rev-parse HEAD)
+          test "${MAIN_SHA}" = "${GITHUB_SHA}"
+          args=()
+          if [ -n "${EXPECTED_VERSION}" ]; then
+            args+=(--expected-version "${EXPECTED_VERSION}")
+          fi
+          HUB_SHA=$(ruby fleet/version.rb verify-tag \
+            --repository . \
+            --version-file fleet/VERSION \
+            --main-ref "${MAIN_SHA}" \
+            "${args[@]}")
+          VERSION=$(ruby fleet/version.rb read --version-file fleet/VERSION)
+          {
+            echo "hub-sha=${HUB_SHA}"
+            echo "main-sha=${MAIN_SHA}"
+            echo "version=${VERSION}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout authenticated release canon
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: release
+          ref: ${{ steps.release.outputs.hub-sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
       - name: Build repository matrix
         id: repos
         env:
-          SELECTED_REPO: ${{ inputs.repo }}
+          MAIN_SHA: ${{ steps.release.outputs.main-sha }}
+          SELECTED_REPO: ${{ github.event.client_payload.repo || '' }}
         run: |
           ruby -ryaml -rjson -e '
-            data = YAML.safe_load(File.read("fleet/repos.yml"), permitted_classes: [], aliases: false)
+            data = YAML.safe_load(File.read("release/fleet/repos.yml"), permitted_classes: [], aliases: false)
             repos = data.fetch("repos")
             selected = ENV.fetch("SELECTED_REPO", "")
             repos = repos.select { |repo| repo == selected } unless selected.empty?
             abort("unknown fleet repo: #{selected}") if repos.empty? && !selected.empty?
             matrix = {
               include: repos.map do |repo|
-                config = YAML.safe_load(
-                  File.read("fleet/repos/#{repo}.yml"),
-                  permitted_classes: [],
-                  aliases: false
-                )
-                {
-                  repo: repo,
-                  release_tag_required: config.dig("params", "renovate") == true
-                }
+                system(
+                  "ruby", "fleet/sync.rb",
+                  "--hub-root", "release",
+                  "--repo-name", repo,
+                  "--publish",
+                  "--main-ref", ENV.fetch("MAIN_SHA"),
+                  "--validate-only"
+                ) ||
+                  abort("invalid fleet config: #{repo}")
+                { repo: repo }
               end
             }
             File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |file| file.puts("matrix=#{JSON.generate(matrix)}") }
@@ -87,34 +121,43 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
-      - name: Checkout fleet hub
+      - name: Checkout trusted main tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: hub
+          path: tool
+          ref: ${{ needs.prepare.outputs.main-sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Checkout authenticated release canon
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: release
+          ref: ${{ needs.prepare.outputs.hub-sha }}
+          fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
-          working-directory: hub/fleet
+          working-directory: tool/fleet
 
-      - name: Wait for fleet release tag
-        if: ${{ matrix.release_tag_required }}
+      - name: Authenticate release source
+        env:
+          EXPECTED_HUB_SHA: ${{ needs.prepare.outputs.hub-sha }}
+          FLEET_VERSION: ${{ needs.prepare.outputs.version }}
+          TRUSTED_MAIN_SHA: ${{ needs.prepare.outputs.main-sha }}
         run: |
-          FLEET_VERSION="$(cat hub/fleet/VERSION)"
-          for _ in {1..36}; do
-            if git -C hub rev-parse --verify --quiet "refs/tags/${FLEET_VERSION}^{commit}" >/dev/null; then
-              exit 0
-            fi
-            git -C hub fetch --quiet origin "refs/tags/${FLEET_VERSION}:refs/tags/${FLEET_VERSION}" || true
-            if git -C hub rev-parse --verify --quiet "refs/tags/${FLEET_VERSION}^{commit}" >/dev/null; then
-              exit 0
-            fi
-            sleep 5
-          done
-          echo "::error::Fleet release tag ${FLEET_VERSION} was not available after 180 seconds"
-          exit 1
+          test "$(git -C tool rev-parse HEAD)" = "${TRUSTED_MAIN_SHA}"
+          ruby tool/fleet/version.rb verify-tag \
+            --repository release \
+            --version-file release/fleet/VERSION \
+            --expected-version "${FLEET_VERSION}" \
+            --expected-commit "${EXPECTED_HUB_SHA}" \
+            --main-ref "${TRUSTED_MAIN_SHA}"
+          test "$(git -C release rev-parse HEAD)" = "${EXPECTED_HUB_SHA}"
 
       - name: Mint read token
         id: read-token
@@ -132,38 +175,54 @@ jobs:
           repository: starhaven-io/${{ matrix.repo }}
           token: ${{ steps.read-token.outputs.token }}
           path: repo
+          ref: ${{ matrix.repo == '.github' && needs.prepare.outputs.main-sha || '' }}
           persist-credentials: false
 
       - name: Render fleet surfaces
         env:
-          FLEET_HUB_SHA: ${{ github.sha }}
           REPO_NAME: ${{ matrix.repo }}
-        run: ruby hub/fleet/sync.rb --hub-root hub --repo-root repo --repo-name "${REPO_NAME}"
+          TRUSTED_MAIN_SHA: ${{ needs.prepare.outputs.main-sha }}
+        run: |
+          hub_args=()
+          if [ "${REPO_NAME}" = ".github" ]; then
+            test "$(git -C repo rev-parse HEAD)" = "${TRUSTED_MAIN_SHA}"
+            hub_args=(--hub)
+          fi
+          ruby tool/fleet/sync.rb \
+            --hub-root release \
+            --repo-root repo \
+            --repo-name "${REPO_NAME}" \
+            --publish \
+            --publication-preflight \
+            --main-ref "${TRUSTED_MAIN_SHA}" \
+            "${hub_args[@]}"
+          ruby release/fleet/sync.rb \
+            --hub-root release \
+            --repo-root repo \
+            --repo-name "${REPO_NAME}" \
+            "${hub_args[@]}"
 
       - name: Collect drift
         id: drift
         working-directory: repo
         run: |
-          # Porcelain v1 C-quotes paths with spaces or quote-worthy bytes;
-          # NUL delimiting keeps every path literal for the commit step.
           status_entries="${RUNNER_TEMP}/fleet-sync-status"
-          git status --porcelain=v1 -z -uall > "${status_entries}"
-          : > ../changed-files.txt
+          git -c status.renames=false status --porcelain=v1 -z -uall > "${status_entries}"
+          : > ../changed-files.nul
           while IFS= read -r -d '' entry; do
-            printf '%s\n' "${entry:3}" >> ../changed-files.txt
+            if [ "${#entry}" -lt 4 ] || [ "${entry:2:1}" != " " ]; then
+              echo "::error::unexpected git status record"
+              exit 1
+            fi
+            printf '%s\0' "${entry:3}" >> ../changed-files.nul
           done < "${status_entries}"
 
-          if [ ! -s ../changed-files.txt ]; then
+          if [ ! -s ../changed-files.nul ]; then
             echo "changed=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
-          {
-            echo "changed=true"
-            echo "files<<EOF"
-            cat ../changed-files.txt
-            echo "EOF"
-          } >> "${GITHUB_OUTPUT}"
+          echo "changed=true" >> "${GITHUB_OUTPUT}"
 
       - name: Require publishable file modes
         if: steps.drift.outputs.changed == 'true'
@@ -171,7 +230,10 @@ jobs:
         run: |
           # createCommitOnBranch signs content commits but cannot express Git tree modes.
           failed=0
-          while IFS= read -r path; do
+          while IFS= read -r -d '' path; do
+            if [ ! -e "${path}" ] && [ ! -L "${path}" ]; then
+              continue
+            fi
             if [ -L "${path}" ]; then
               echo "::error file=${path}::fleet sync cannot publish a symlink; managed surfaces must be regular files"
               failed=1
@@ -198,8 +260,30 @@ jobs:
               echo "::error file=${path}::fleet sync cannot publish mode ${tracked_mode} -> ${desired_mode}; standardize the consumer mode first"
               failed=1
             fi
-          done < ../changed-files.txt
+          done < ../changed-files.nul
           exit "${failed}"
+
+      - name: Protect newer hub paths
+        if: steps.drift.outputs.changed == 'true' && matrix.repo == '.github'
+        env:
+          RELEASE_SHA: ${{ needs.prepare.outputs.hub-sha }}
+          TRUSTED_MAIN_SHA: ${{ needs.prepare.outputs.main-sha }}
+        run: |
+          post_release_paths="${RUNNER_TEMP}/fleet-hub-post-release-paths"
+          git -C tool diff --name-only -z --no-renames \
+            "${RELEASE_SHA}" "${TRUSTED_MAIN_SHA}" > "${post_release_paths}"
+          CHANGED_PATHS=changed-files.nul \
+            POST_RELEASE_PATHS="${post_release_paths}" \
+            ruby -rset -e '
+              rendered = File.binread(ENV.fetch("CHANGED_PATHS")).split("\0").reject(&:empty?).to_set
+              changed = File.binread(ENV.fetch("POST_RELEASE_PATHS")).split("\0").reject(&:empty?).to_set
+              overlap = rendered & changed
+              exit 0 if overlap.empty?
+
+              warn "tagged hub render would overwrite paths changed after the authenticated release:"
+              overlap.sort.each { |path| warn "  #{path.inspect}" }
+              exit 1
+            '
 
       - name: Mint write token
         id: write-token
@@ -222,7 +306,7 @@ jobs:
           APP_SLUG: ${{ steps.write-token.outputs.app-slug }}
           REPOSITORY: starhaven-io/${{ matrix.repo }}
         run: |
-          FLEET_VERSION="$(cat ../hub/fleet/VERSION)"
+          FLEET_VERSION="$(cat ../release/fleet/VERSION)"
           TITLE="chore(fleet): sync managed surfaces ${FLEET_VERSION}"
           BRANCH="fleet-sync-${FLEET_VERSION}"
           BOT_USER="${APP_SLUG}[bot]"
@@ -231,14 +315,46 @@ jobs:
           BASE_SHA=$(git rev-parse HEAD)
 
           BODY_FILE="${RUNNER_TEMP}/fleet-pr-body.md"
-          {
-            echo "Automated convergence of fleet-managed surfaces."
-            echo ""
-            echo "Managed surfaces changed:"
-            sed 's/^/- `/' ../changed-files.txt | sed 's/$/`/'
-            echo ""
-            echo "Any file listed here drifted from the hub canonical source or received newly rendered fleet markers."
-          } > "${BODY_FILE}"
+          # shellcheck disable=SC2016 # Ruby interpolation and Markdown backticks are intentionally literal to the shell.
+          BODY_FILE="${BODY_FILE}" ruby -e '
+            paths = File.binread("../changed-files.nul").split("\0").reject(&:empty?)
+            File.open(ENV.fetch("BODY_FILE"), "w") do |file|
+              file.puts("Automated convergence of fleet-managed surfaces.\n\nManaged surfaces changed:")
+              paths.each { |path| file.puts("- `#{path.gsub("`", "\\\\`")}`") }
+              file.puts("\nAny file listed here drifted from the authenticated fleet release or was retired by it.")
+            end
+          '
+
+          PULLS_FILE="${RUNNER_TEMP}/fleet-open-pulls.json"
+          list_open_pulls() {
+            gh api --paginate "repos/${REPOSITORY}/pulls?state=open&per_page=100" | jq -s 'add' > "${PULLS_FILE}"
+          }
+          verified_pull() {
+            local command=$1
+            local result
+            for attempt in 1 2 3 4 5; do
+              list_open_pulls
+              if result=$(ruby ../tool/fleet/pr_identity.rb "${command}" \
+                --repository "${REPOSITORY}" \
+                --branch "${BRANCH}" \
+                --base main \
+                --author "${BOT_USER}" \
+                --head-oid "${COMMIT_OID}" < "${PULLS_FILE}"); then
+                printf '%s' "${result}"
+                return 0
+              fi
+              if [ "${attempt}" -eq 5 ]; then
+                return 1
+              fi
+              sleep 2
+            done
+          }
+          list_open_pulls
+          ruby ../tool/fleet/pr_identity.rb preflight \
+            --repository "${REPOSITORY}" \
+            --branch "${BRANCH}" \
+            --base main \
+            --author "${BOT_USER}" < "${PULLS_FILE}"
 
           if gh api "repos/${REPOSITORY}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
             gh api "repos/${REPOSITORY}/git/refs/heads/${BRANCH}" \
@@ -252,62 +368,75 @@ jobs:
               -f "sha=${BASE_SHA}"
           fi
 
-          ADDITIONS=$(ruby -rjson -e '
-            files = File.readlines("../changed-files.txt", chomp: true)
-            additions = files.map do |path|
-              { path: path, contents: [File.binread(path)].pack("m0") }
+          # shellcheck disable=SC2016 # Ruby interpolation is intentionally literal to the shell.
+          FILE_CHANGES=$(ruby -rjson -e '
+            paths = File.binread("../changed-files.nul").split("\0").reject(&:empty?)
+            additions = []
+            deletions = []
+            paths.each do |path|
+              abort("unsafe path in fleet manifest") if path.each_codepoint.any? { |cp| cp < 0x20 || cp == 0x7f }
+              if File.symlink?(path)
+                abort("symlink in fleet manifest: #{path.inspect}")
+              elsif File.file?(path)
+                additions << { path: path, contents: [File.binread(path)].pack("m0") }
+              elsif !File.exist?(path)
+                deletions << { path: path }
+              else
+                abort("non-file in fleet manifest: #{path.inspect}")
+              end
             end
-            print JSON.generate(additions)
+            print JSON.generate({ additions: additions, deletions: deletions })
           ')
 
           COMMIT_BODY="Signed-off-by: ${BOT_USER} <${BOT_EMAIL}>"
+          COMMIT_RESPONSE="${RUNNER_TEMP}/fleet-commit-response.json"
+          # shellcheck disable=SC2016 # jq variables are intentionally literal to the shell.
           jq -n \
             --arg repo "${REPOSITORY}" \
             --arg branch "${BRANCH}" \
             --arg title "${TITLE}" \
             --arg body "${COMMIT_BODY}" \
             --arg head "${BASE_SHA}" \
-            --argjson additions "${ADDITIONS}" \
+            --argjson file_changes "${FILE_CHANGES}" \
             '{
               query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
               variables: {
                 input: {
                   branch: { repositoryNameWithOwner: $repo, branchName: $branch },
                   message: { headline: $title, body: $body },
-                  fileChanges: { additions: $additions },
+                  fileChanges: $file_changes,
                   expectedHeadOid: $head
                 }
               }
-            }' | gh api graphql --input -
+            }' | gh api graphql --input - > "${COMMIT_RESPONSE}"
+          COMMIT_OID=$(jq -er '.data.createCommitOnBranch.commit.oid' "${COMMIT_RESPONSE}")
 
-          OPEN_PR=$(gh pr list \
-            --repo "${REPOSITORY}" \
-            --head "${BRANCH}" \
-            --state open \
-            --json number \
-            --jq '.[0].number // ""')
+          OPEN_PR=$(verified_pull optional)
 
           if [ -n "${OPEN_PR}" ]; then
             gh pr edit "${OPEN_PR}" --repo "${REPOSITORY}" --title "${TITLE}" --body-file "${BODY_FILE}"
           else
-            gh pr create --repo "${REPOSITORY}" --base main --head "${BRANCH}" --title "${TITLE}" --body-file "${BODY_FILE}"
+            jq -n \
+              --arg title "${TITLE}" \
+              --arg head "${REPOSITORY%%/*}:${BRANCH}" \
+              --rawfile body "${BODY_FILE}" \
+              '{ title: $title, head: $head, base: "main", body: $body }' |
+              gh api "repos/${REPOSITORY}/pulls" -X POST --input -
           fi
 
           # Convergence PRs are deterministic re-renders of reviewed hub canon;
           # let GitHub land them once required checks pass instead of piling up.
-          PR_NUMBER=$(gh pr list \
-            --repo "${REPOSITORY}" \
-            --head "${BRANCH}" \
-            --state open \
-            --json number \
-            --jq '.[0].number // ""')
-          if [ -n "${PR_NUMBER}" ]; then
-            gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --auto --squash \
-              || echo "::warning::could not enable auto-merge for ${REPOSITORY}#${PR_NUMBER}"
-          fi
+          PR_NUMBER=$(verified_pull select)
+          gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --auto --squash \
+            --match-head-commit "${COMMIT_OID}" \
+            || echo "::warning::could not enable auto-merge for ${REPOSITORY}#${PR_NUMBER}"
 
-          gh pr list --repo "${REPOSITORY}" --state open --json number,headRefName \
-            --jq ".[] | select(.headRefName | startswith(\"fleet-sync-\")) | select(.headRefName != \"${BRANCH}\") | .number" |
+          ruby ../tool/fleet/pr_identity.rb stale \
+            --repository "${REPOSITORY}" \
+            --prefix "fleet-sync-" \
+            --current-branch "${BRANCH}" \
+            --base main \
+            --author "${BOT_USER}" < "${PULLS_FILE}" |
           while IFS= read -r STALE; do
             gh pr close "${STALE}" --repo "${REPOSITORY}" --delete-branch \
               --comment "Superseded by the ${FLEET_VERSION} sync."

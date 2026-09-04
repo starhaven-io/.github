@@ -1,10 +1,14 @@
 schema: 1
+visibility: "public"
 license: "mit"
 params:
   dependabot:
     - package-ecosystem: "bundler"
       group: "bundler-dependencies"
       directory: "/fleet"
+    - package-ecosystem: "npm"
+      group: "fleet-validator-dependencies"
+      directory: "/fleet/validator"
     - package-ecosystem: "github-actions"
       group: "github-actions"
       directory: "/"

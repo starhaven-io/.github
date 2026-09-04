@@ -165,6 +165,20 @@ class CommitMsgHookTest < Minitest::Test
     assert_includes result.stderr, "missing DCO sign-off"
   end
 
+  def test_rejects_body_text_that_looks_like_a_signoff
+    result = run_hook(<<~MESSAGE)
+      feat: unsigned change
+
+      Signed-off-by: Not A Trailer <body@example.com>
+      This sentence keeps the line in the message body.
+
+      Refs: #123
+    MESSAGE
+
+    refute result.success?
+    assert_includes result.stderr, "missing DCO sign-off"
+  end
+
   private
 
   def run_hook(message, env = {})

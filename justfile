@@ -26,6 +26,11 @@ check:
         run tests env BUNDLE_GEMFILE=fleet/Gemfile bundle exec ruby -e 'Dir["fleet/test/*_test.rb"].sort.each { |file| require File.expand_path(file) }'
         run rubocop env BUNDLE_GEMFILE=fleet/Gemfile bundle exec rubocop --config fleet/.rubocop.yml --cache false fleet/
     fi
+    if command -v actionlint &>/dev/null; then
+        run actionlint actionlint -ignore 'reusable workflow call "\$/\.github/workflows/(reusable-conventional-commits|fleet-validate|reusable-zizmor)\.yml"'
+    else
+        skip actionlint "actionlint not found" "brew install actionlint"
+    fi
     if command -v zizmor &>/dev/null; then
         run audit zizmor --persona auditor .github/workflows/
     else

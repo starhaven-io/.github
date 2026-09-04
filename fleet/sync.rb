@@ -7,6 +7,7 @@ require "json"
 require "optparse"
 require "open3"
 require "yaml"
+require_relative "version"
 
 class FleetError < StandardError; end
 
@@ -35,6 +36,14 @@ class TemplateContext
 end
 
 class FleetSync
+  Surface = Struct.new(:path, :label, keyword_init: true) do
+    def to_s
+      label ? "#{path}:#{label}" : path
+    end
+  end
+
+  WorkflowCall = Struct.new(:workflow, :ref, :comment, :line, keyword_init: true)
+
   SAME_ORG_ADVANCED_SECURITY =
     "${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}"
 
@@ -76,7 +85,10 @@ class FleetSync
     zizmor
   ].freeze
 
-  NPM_POLICY_PROJECT_PATTERN = %r{\A[A-Za-z0-9._][A-Za-z0-9._/-]*\z}
+  NPM_POLICY_PROJECT_PATTERN = %r{\A(?:\.|[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)\z}
+  WORKFLOW_FILE_PATTERN = %r{\A\.github/workflows/[A-Za-z0-9][A-Za-z0-9_.-]*\.ya?ml\z}
+  VISIBILITIES = %w[public private].freeze
+  MAX_TIMEOUT_MINUTES = 360
 
   EXCEPTION_KEYS = %w[
     audit
@@ -92,8 +104,8 @@ class FleetSync
     version-update:semver-minor
     version-update:semver-patch
   ].freeze
-  CODEQL_BUILD_MODES = ["", "none", "autobuild", "manual"].freeze
-  CODEQL_BUILD_PROFILES = ["", "swift-package", "brewy-xcode"].freeze
+  CODEQL_BUILD_MODES = %w[none autobuild manual].freeze
+  CODEQL_BUILD_PROFILES = %w[swift-package brewy-xcode].freeze
   FLEET_MARKER_PATTERN = /<!--\s*fleet:(?:block|end)\b/
   # A just recipe or alias definition starts at column 0; `(?!=)` keeps
   # `name := value` assignments and `set`/`export` directives out.
@@ -116,23 +128,48 @@ class FleetSync
 
   attr_reader :changes
 
-  def initialize(hub_root:, repo_root:, repo_name:, check:, guard_base:, hub: false, adopt: false)
+  def initialize(hub_root:, repo_root:, repo_name:, check:, guard_base:, hub: false, adopt: false, publish: false,
+                 validate_only: false, list_managed_workflows: false, main_ref: nil, publication_preflight: false)
     @hub_root = Pathname(hub_root).expand_path
     @repo_root = Pathname(repo_root).expand_path
     @repo_name = repo_name
-    @check = check || !guard_base.nil?
+    @requested_check = check
+    @publication_preflight = publication_preflight
+    @check = check || !guard_base.nil? || publication_preflight
     @guard_base = guard_base
     @hub = hub
     @adopt = adopt
+    @publish = publish
+    @validate_only = validate_only
+    @list_managed_workflows = list_managed_workflows
+    @main_ref = main_ref
     @changes = []
   end
 
   def run
     raise FleetError, "--adopt cannot be combined with --check or --guard" if @adopt && @check
+    raise FleetError, "--publish cannot be combined with --guard" if @publish && @guard_base
+    raise FleetError, "--publish requires --main-ref" if @publish && !@main_ref
+    raise FleetError, "--publication-preflight requires --publish" if @publication_preflight && !@publish
 
+    incompatible_preflight_mode = @requested_check || @guard_base || @adopt || @validate_only || @list_managed_workflows
+    if @publication_preflight && incompatible_preflight_mode
+      raise FleetError,
+            "--publication-preflight cannot be combined with --check, --guard, --adopt, --validate-only, or " \
+            "--list-managed-workflows"
+    end
+    if @list_managed_workflows && (@check || @guard_base || @adopt || @validate_only)
+      raise FleetError, "--list-managed-workflows cannot be combined with --check, --guard, --adopt, or --validate-only"
+    end
+
+    validate_roots
     validate_guard_repository_identity
     config = load_config
-    validate_config(config)
+    validate_config(config, require_visibility: !@publish)
+    verify_publication_release if @publish
+    return list_managed_workflows(config) if @list_managed_workflows
+    return if @validate_only
+
     validate_rendered_config_path
     assert_unique_marked_blocks(config)
     assert_unique_just_recipes(config)
@@ -141,6 +178,11 @@ class FleetSync
 
     adopt_missing_fences(config) if @adopt
     render_all(config)
+    if @publication_preflight
+      @changes.clear
+      return
+    end
+
     report_changes
     raise FleetError, "fleet sync drift detected" if @check && @changes.any?
   end
@@ -148,11 +190,168 @@ class FleetSync
   private
 
   def render_all(config)
+    retire_stale_surfaces(config)
     render_fleet_config
     render_tier1(config)
     render_tier2(config)
     render_tier3(config)
     render_reusable_workflow_pins
+  end
+
+  def retire_stale_surfaces(config)
+    prior = prior_config
+    return unless prior
+
+    retired = managed_surfaces(prior) - managed_surfaces(config)
+    retired.reject! { |retired_surface| relinquished_by_exception?(retired_surface, config) }
+    retired.each do |retired_surface|
+      if retired_surface.label
+        clear_managed_block(retired_surface, prior)
+      else
+        delete_managed_file(retired_surface)
+      end
+    end
+  end
+
+  def prior_config
+    return @prior_config if defined?(@prior_config)
+
+    path = repo_path(".fleet.yml")
+    return @prior_config = nil unless managed_path_present?(path)
+    raise FleetError, non_regular_file_message(".fleet.yml") unless regular_file?(path)
+
+    text = read_path(path)
+    validate_config_text(text, ".fleet.yml")
+    config = YAML.safe_load(text, permitted_classes: [], aliases: false)
+    validate_prior_config(config)
+    @prior_config = config
+  rescue Psych::Exception => e
+    raise FleetError, "existing .fleet.yml could not be parsed for surface retirement: #{e.message}"
+  end
+
+  def validate_prior_config(config)
+    raise FleetError, "existing .fleet.yml must be a mapping" unless config.is_a?(Hash)
+
+    raise FleetError, "existing .fleet.yml schema must be 1" unless config["schema"] == 1
+
+    license = config["license"]
+    unless %w[agpl mit none].include?(license)
+      raise FleetError, "existing .fleet.yml license must be agpl, mit, or none"
+    end
+
+    params = config["params"] || {}
+    exceptions = config["exceptions"] || {}
+    raise FleetError, "existing .fleet.yml params must be a mapping" unless params.is_a?(Hash)
+    raise FleetError, "existing .fleet.yml exceptions must be a mapping" unless exceptions.is_a?(Hash)
+
+    validate_boolean(params, "astro-docs", "existing .fleet.yml params.astro-docs")
+    validate_boolean(params, "renovate", "existing .fleet.yml params.renovate")
+    %w[pinprick-audit zizmor].each do |key|
+      next unless params.key?(key)
+      next if params[key].is_a?(Hash)
+
+      raise FleetError, "existing .fleet.yml params.#{key} must be a mapping"
+    end
+
+    validate_prior_nonempty_collection(params, "dependabot", [Array, Hash])
+    validate_prior_nonempty_collection(params, "link-check", [Hash])
+    validate_prior_npm_policy(params["npm-policy"]) if params.key?("npm-policy")
+    validate_prior_codeql(params["codeql"]) if params.key?("codeql")
+    validate_prior_readme(params["readme"]) if params.key?("readme")
+    EXCEPTION_KEYS.each do |key|
+      next unless exceptions.key?(key)
+
+      validate_plain_string(exceptions[key], "existing .fleet.yml exceptions.#{key}")
+    end
+  end
+
+  def validate_prior_nonempty_collection(params, key, types)
+    return unless params.key?(key)
+
+    value = params[key]
+    return if types.any? { |type| value.is_a?(type) } && !value.empty?
+
+    expected = types == [Hash] ? "a nonempty mapping" : "a nonempty mapping or array"
+    raise FleetError, "existing .fleet.yml params.#{key} must be #{expected}"
+  end
+
+  def validate_prior_npm_policy(value)
+    unless value.is_a?(Hash) && value["projects"].is_a?(Array) && value["projects"].any?
+      raise FleetError, "existing .fleet.yml params.npm-policy.projects must be a nonempty array"
+    end
+
+    value.fetch("projects").each_with_index do |project, index|
+      validate_plain_string(project, "existing .fleet.yml params.npm-policy.projects[#{index}]")
+    end
+  end
+
+  def validate_prior_codeql(value)
+    unless value.is_a?(Hash) && value["languages"].is_a?(Array) && value["languages"].any?
+      raise FleetError, "existing .fleet.yml params.codeql.languages must be a nonempty array"
+    end
+
+    value.fetch("languages").each_with_index do |language, index|
+      validate_plain_string(language, "existing .fleet.yml params.codeql.languages[#{index}]")
+    end
+  end
+
+  def validate_prior_readme(value)
+    raise FleetError, "existing .fleet.yml params.readme must be a mapping" unless value.is_a?(Hash)
+
+    %w[badges license].each do |key|
+      next unless value.key?(key)
+      next if value[key].is_a?(Hash)
+
+      raise FleetError, "existing .fleet.yml params.readme.#{key} must be a mapping"
+    end
+  end
+
+  def relinquished_by_exception?(retired_surface, config)
+    exception =
+      case [retired_surface.path, retired_surface.label]
+      when [".github/workflows/codeql.yml", nil] then "codeql"
+      when [".github/workflows/pinprick-audit.yml", nil] then "pinprick-audit"
+      when [".github/workflows/zizmor.yml", nil] then "zizmor"
+      when %w[justfile audit] then "audit"
+      when %w[justfile pinprick-audit] then "pinprick-audit-recipe"
+      end
+    exception && exception?(config, exception)
+  end
+
+  def delete_managed_file(retired_surface)
+    path = repo_path(retired_surface.path)
+    return unless managed_path_present?(path)
+    raise FleetError, non_regular_file_message(retired_surface.path) if !path.symlink? && !regular_file?(path)
+
+    @changes << retired_surface
+    File.unlink(path) unless @check
+  end
+
+  def clear_managed_block(retired_surface, prior)
+    block = guard_managed_blocks(prior).find do |candidate|
+      candidate.fetch(:path) == retired_surface.path && candidate.fetch(:name) == retired_surface.label
+    end
+    return unless block
+
+    path = repo_path(retired_surface.path)
+    return unless managed_path_present?(path)
+    raise FleetError, non_regular_file_message(retired_surface.path) unless regular_file?(path)
+
+    current = read_path(path)
+    start_count = current.scan(block_start_marker(retired_surface.label, block.fetch(:style))).length
+    if start_count.zero?
+      raise FleetError,
+            "#{retired_surface.path} is missing fleet:block #{retired_surface.label} required for retirement"
+    end
+    raise FleetError, duplicate_marker_message(block, start_count) unless start_count == 1
+
+    marker = marker_regex(retired_surface.label, block.fetch(:style))
+    unless current.match?(marker)
+      raise FleetError, "#{retired_surface.path} has an unclosed fleet:block #{retired_surface.label}"
+    end
+
+    cleared = current.sub(marker, empty_fence(retired_surface.label, block.fetch(:style)))
+    write_file(retired_surface.path, cleared, retired_surface)
   end
 
   def run_guard(config)
@@ -161,15 +360,18 @@ class FleetSync
     # latest hub canon can race a consumer rollout and invent declassification.
     base_managed = guard_base_config ? managed_surfaces(guard_base_config) : []
     declassified_surfaces = base_managed - head_managed
-    raise FleetError, guard_declassification_message(declassified_surfaces) if declassified_surfaces.any? && !hub_repo?
-
     reject_consumer_fleet_config_edit
+    reject_invalid_workflow_paths
+    validate_managed_path_ancestors(config)
     reject_hidden_reusable_pins
     reject_symlinked_workflow_paths(config)
     reject_reusable_workflow_declassification
 
     managed_changes = changed_managed_surfaces(config)
     return if managed_changes.empty?
+
+    declassified_changes = managed_changes & declassified_surfaces
+    raise FleetError, guard_declassification_message(declassified_changes) if declassified_changes.any? && !hub_repo?
 
     @changes.clear
     begin
@@ -181,7 +383,7 @@ class FleetSync
     # Only surfaces this pull request touched can fail it; drift that
     # predates the branch belongs to the sync, not to the author.
     touched = guard_changed_paths
-    flagged = @changes.select { |surface| touched.include?(surface.split(":").first) }
+    flagged = @changes.select { |changed_surface| touched.include?(changed_surface.path) }
     raise FleetError, guard_failure_message(flagged) if flagged.any?
   end
 
@@ -233,7 +435,7 @@ class FleetSync
 
   def validate_repo_config_inventory(repos)
     directory = hub_path("repos")
-    raise FleetError, "fleet/repos must be a directory" unless directory.directory? && !directory.symlink?
+    raise FleetError, "fleet/repos must be a real directory" unless real_directory?(directory)
 
     expected = repos.map { |repo| "#{repo}.yml" }.sort
     # Dir.children is required here because the hub's own config is the .github.yml dotfile.
@@ -250,11 +452,15 @@ class FleetSync
     raise FleetError, "fleet/repos inventory mismatch (#{details.join("; ")})"
   end
 
-  def validate_config(config)
+  def validate_config(config, require_visibility: true)
     raise FleetError, ".fleet.yml must be a mapping" unless config.is_a?(Hash)
 
-    reject_unknown_keys(config, %w[exceptions license params schema], ".fleet.yml")
+    reject_unknown_keys(config, %w[exceptions license params schema visibility], ".fleet.yml")
     raise FleetError, ".fleet.yml schema must be 1" unless config["schema"] == 1
+
+    if require_visibility || config.key?("visibility")
+      validate_enum(config["visibility"], VISIBILITIES, ".fleet.yml visibility")
+    end
 
     license = config["license"]
     raise FleetError, ".fleet.yml license must be agpl, mit, or none" unless %w[agpl mit none].include?(license)
@@ -266,6 +472,7 @@ class FleetSync
 
     validate_params(params)
     validate_exceptions(exceptions)
+    validate_cross_parameter_invariants(params)
   end
 
   def validate_config_text(text, path)
@@ -296,19 +503,34 @@ class FleetSync
 
   def validate_dependabot(value)
     if value.is_a?(Array)
+      raise FleetError, ".fleet.yml params.dependabot must not be empty" if value.empty?
+
       value.each_with_index do |entry, index|
         validate_dependabot_entry(entry, ".fleet.yml params.dependabot[#{index}]")
       end
     elsif value.is_a?(Hash)
+      raise FleetError, ".fleet.yml params.dependabot must not be empty" if value.empty?
+
       value.each do |ecosystem, directories|
         validate_dependabot_ecosystem(ecosystem, ".fleet.yml params.dependabot ecosystem")
-        Array(directories).each_with_index do |directory, index|
-          validate_plain_string(directory, ".fleet.yml params.dependabot.#{ecosystem}[#{index}]")
+        unless directories.is_a?(Array) && directories.any?
+          raise FleetError, ".fleet.yml params.dependabot.#{ecosystem} must be a nonempty array"
+        end
+
+        directories.each_with_index do |directory, index|
+          validate_dependabot_directory(directory, ".fleet.yml params.dependabot.#{ecosystem}[#{index}]")
         end
       end
     else
       raise FleetError, ".fleet.yml params.dependabot must be a mapping or array"
     end
+
+    keys = dependabot_entries(value).flat_map do |entry|
+      directories = entry.key?("directory") ? [entry.fetch("directory")] : entry.fetch("directories")
+      directories.map { |directory| [entry.fetch("package-ecosystem"), directory] }
+    end
+    duplicates = keys.tally.select { |_key, count| count > 1 }.keys
+    raise FleetError, ".fleet.yml params.dependabot contains duplicate update targets" if duplicates.any?
   end
 
   def validate_dependabot_entry(entry, path)
@@ -317,8 +539,16 @@ class FleetSync
     reject_unknown_keys(entry, %w[allow directories directory group ignore package-ecosystem], path)
     ecosystem = entry["package-ecosystem"]
     validate_dependabot_ecosystem(ecosystem, "#{path}.package-ecosystem")
-    validate_plain_string(entry["directory"], "#{path}.directory") if entry.key?("directory")
-    validate_string_array(entry, "directories", "#{path}.directories")
+    directory_keys = %w[directory directories].select { |key| entry.key?(key) }
+    raise FleetError, "#{path} must set exactly one of directory or directories" unless directory_keys.one?
+
+    validate_dependabot_directory(entry["directory"], "#{path}.directory") if entry.key?("directory")
+    if entry.key?("directories")
+      validate_string_array(entry, "directories", "#{path}.directories", nonempty: true)
+      entry.fetch("directories").each_with_index do |directory, index|
+        validate_dependabot_directory(directory, "#{path}.directories[#{index}]")
+      end
+    end
     validate_identifier(entry["group"], "#{path}.group") if entry.key?("group")
     validate_dependabot_allow(entry["allow"], "#{path}.allow") if entry.key?("allow")
     validate_dependabot_ignore(entry["ignore"], "#{path}.ignore") if entry.key?("ignore")
@@ -362,6 +592,15 @@ class FleetSync
     raise FleetError, "#{path} must contain only lowercase letters, numbers, and hyphens"
   end
 
+  def validate_dependabot_directory(value, path)
+    validate_plain_string(value, path)
+    components = value.split("/")
+    return if value.start_with?("/") && Pathname(value).cleanpath.to_s == value &&
+              !components.intersect?(%w[. ..])
+
+    raise FleetError, "#{path} must be a normalized absolute Dependabot directory without dot segments"
+  end
+
   def validate_link_check(value)
     path = ".fleet.yml params.link-check"
     raise FleetError, "#{path} must be a mapping" unless value.is_a?(Hash)
@@ -375,8 +614,8 @@ class FleetSync
     validate_boolean(value, "build-site", "#{path}.build-site")
     validate_plain_string(value["site-directory"], "#{path}.site-directory") if value.key?("site-directory")
     validate_boolean(value, "authenticated-github", "#{path}.authenticated-github")
-    validate_plain_string(value["schedule"], "#{path}.schedule") if value.key?("schedule")
-    validate_string_array(value, "pull-request-paths", "#{path}.pull-request-paths")
+    validate_cron(value["schedule"], "#{path}.schedule") if value.key?("schedule")
+    validate_string_array(value, "pull-request-paths", "#{path}.pull-request-paths", nonempty: true)
     validate_plain_string(value["concurrency-group"], "#{path}.concurrency-group") if value.key?("concurrency-group")
   end
 
@@ -392,10 +631,14 @@ class FleetSync
     projects.each_with_index do |project, index|
       entry_path = "#{path}.projects[#{index}]"
       validate_plain_string(project, entry_path)
-      next if project.match?(NPM_POLICY_PROJECT_PATTERN)
+      components = project.split("/")
+      next if project.match?(NPM_POLICY_PROJECT_PATTERN) &&
+              (project == "." || !components.intersect?(%w[. ..]))
 
       raise FleetError, "#{entry_path} must be a relative project directory"
     end
+    duplicates = projects.tally.select { |_project, count| count > 1 }.keys
+    raise FleetError, "#{path}.projects contains duplicates: #{duplicates.sort.join(", ")}" if duplicates.any?
   end
 
   def validate_codeql(value)
@@ -403,15 +646,17 @@ class FleetSync
     raise FleetError, "#{path} must be a mapping" unless value.is_a?(Hash)
 
     reject_unknown_keys(value, %w[build-mode build-profile languages paths runner schedule timeout-minutes], path)
-    validate_string_array(value, "languages", "#{path}.languages")
-    validate_string_array(value, "paths", "#{path}.paths")
+    validate_string_array(value, "languages", "#{path}.languages", nonempty: true)
+    raise FleetError, "#{path}.languages is required" unless value.key?("languages")
+
+    validate_string_array(value, "paths", "#{path}.paths", nonempty: true)
     validate_plain_string(value["runner"], "#{path}.runner") if value.key?("runner")
     validate_integer(value, "timeout-minutes", "#{path}.timeout-minutes")
     validate_enum(value["build-mode"].to_s, CODEQL_BUILD_MODES, "#{path}.build-mode") if value.key?("build-mode")
     if value.key?("build-profile")
       validate_enum(value["build-profile"].to_s, CODEQL_BUILD_PROFILES, "#{path}.build-profile")
     end
-    validate_plain_string(value["schedule"], "#{path}.schedule") if value.key?("schedule")
+    validate_cron(value["schedule"], "#{path}.schedule") if value.key?("schedule")
   end
 
   def validate_pinprick_audit(value)
@@ -423,7 +668,7 @@ class FleetSync
       validate_advanced_security(value["advanced-security"], "#{path}.advanced-security")
     end
     validate_boolean(value, "fail-on-findings", "#{path}.fail-on-findings")
-    validate_string_array(value, "push-paths", "#{path}.push-paths")
+    validate_string_array(value, "push-paths", "#{path}.push-paths", nonempty: true)
     validate_integer(value, "timeout-minutes", "#{path}.timeout-minutes")
   end
 
@@ -432,8 +677,8 @@ class FleetSync
     raise FleetError, "#{path} must be a mapping" unless value.is_a?(Hash)
 
     reject_unknown_keys(value, %w[push-paths schedule timeout-minutes], path)
-    validate_string_array(value, "push-paths", "#{path}.push-paths")
-    validate_plain_string(value["schedule"], "#{path}.schedule") if value.key?("schedule")
+    validate_string_array(value, "push-paths", "#{path}.push-paths", nonempty: true)
+    validate_cron(value["schedule"], "#{path}.schedule") if value.key?("schedule")
     validate_integer(value, "timeout-minutes", "#{path}.timeout-minutes")
   end
 
@@ -469,6 +714,43 @@ class FleetSync
     end
   end
 
+  def validate_cross_parameter_invariants(params)
+    link_check = params["link-check"]
+    return unless link_check.is_a?(Hash) && link_check["build-site"] == true
+
+    project = link_check.fetch("site-directory", ".")
+    projects = params.dig("npm-policy", "projects")
+    return if projects.is_a?(Array) && projects.include?(project)
+
+    raise FleetError,
+          ".fleet.yml params.link-check build-site requires npm-policy.projects to include #{project.inspect}"
+  end
+
+  def validate_cron(value, path)
+    validate_plain_string(value, path)
+    fields = value.split
+    raise FleetError, "#{path} must contain five numeric POSIX cron fields" unless fields.length == 5
+
+    ranges = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]]
+    fields.zip(ranges).each_with_index do |(field, range), index|
+      parts = field.split(",", -1)
+      valid = parts.none?(&:empty?) && parts.all? { |part| valid_cron_part?(part, range) }
+      raise FleetError, "#{path} field #{index + 1} is not a supported numeric cron expression" unless valid
+    end
+  end
+
+  def valid_cron_part?(part, range)
+    base, step = part.split("/", 2)
+    return false if step && (!step.match?(/\A[1-9]\d*\z/) || step.to_i > range.last - range.first + 1)
+    return true if base == "*"
+
+    bounds = base.split("-", 2)
+    return false unless bounds.all? { |bound| bound.match?(/\A\d+\z/) }
+
+    values = bounds.map(&:to_i)
+    values.all? { |value| value.between?(range.first, range.last) } && (values.one? || values.first <= values.last)
+  end
+
   def reject_unknown_keys(hash, allowed, path)
     unknown = hash.keys - allowed
     return if unknown.empty?
@@ -485,22 +767,24 @@ class FleetSync
 
   def validate_integer(hash, key, path)
     return unless hash.key?(key)
-    return if hash[key].is_a?(Integer)
+    return if hash[key].is_a?(Integer) && hash[key].between?(1, MAX_TIMEOUT_MINUTES)
 
-    raise FleetError, "#{path} must be an integer"
+    raise FleetError, "#{path} must be an integer from 1 to #{MAX_TIMEOUT_MINUTES}"
   end
 
-  def validate_string_array(hash, key, path)
+  def validate_string_array(hash, key, path, nonempty: false)
     return unless hash.key?(key)
     raise FleetError, "#{path} must be an array" unless hash[key].is_a?(Array)
+    raise FleetError, "#{path} must not be empty" if nonempty && hash[key].empty?
 
     hash[key].each_with_index do |value, index|
       validate_plain_string(value, "#{path}[#{index}]")
     end
   end
 
-  def validate_plain_string(value, path)
+  def validate_plain_string(value, path, allow_empty: false)
     raise FleetError, "#{path} must be a string" unless value.is_a?(String)
+    raise FleetError, "#{path} must not be blank" if !allow_empty && value.strip.empty?
     return unless control_char?(value)
 
     raise FleetError, "#{path} must not contain control characters or line separators"
@@ -790,6 +1074,9 @@ class FleetSync
     workflow_files.each do |relative_path|
       path = repo_path(relative_path)
       current = read_path(path)
+      hidden_pins = hidden_reusable_pins(current)
+      raise FleetError, hidden_reusable_pin_message(relative_path, hidden_pins) if hidden_pins.any?
+
       next_content = sync_reusable_pins(current, ref, version)
       next if next_content == current
 
@@ -798,33 +1085,52 @@ class FleetSync
   end
 
   def sync_reusable_pins(text, ref, version)
-    text.each_line.map do |line|
+    calls = reusable_workflow_calls(text).to_h { |call| [call.line, call] }
+    text.each_line.with_index.map do |line, line_number|
+      call = calls[line_number]
+      next line unless call
+
       newline = line.end_with?("\n") ? "\n" : ""
       body = line.delete_suffix("\n")
       match = body.match(REUSABLE_WORKFLOW_USES_PATTERN)
-      next line unless match
+      raise FleetError, "workflow call on line #{line_number + 1} must remain a single-line uses scalar" unless match
 
-      "#{match[:prefix]}#{match[:quote]}#{match[:workflow]}@#{ref}#{match[:quote]} # #{version}#{newline}"
+      "#{match[:prefix]}#{match[:quote]}#{call.workflow}@#{ref}#{match[:quote]} # #{version}#{newline}"
     end.join
   end
 
   def workflow_files
-    [".github/workflows/*.yml", ".github/workflows/*.yaml"].flat_map do |pattern|
-      Dir.glob(repo_path(pattern).to_s).filter_map do |path|
-        candidate = Pathname(path)
-        next unless regular_file?(candidate)
+    directory = repo_path(".github/workflows")
+    return [] unless managed_path_present?(directory)
+    if directory.symlink?
+      raise FleetError, symlinked_workflow_ancestor_message(".github/workflows", ".github/workflows")
+    end
+    raise FleetError, ".github/workflows is not a real directory" unless real_directory?(directory)
 
-        candidate.relative_path_from(@repo_root).to_s
-      end
+    Dir.children(directory).filter_map do |entry|
+      next unless entry.end_with?(".yml", ".yaml")
+
+      relative = ".github/workflows/#{entry}"
+      validate_workflow_path(relative)
+      candidate = repo_path(relative)
+      next unless regular_file?(candidate)
+
+      relative
     end.sort
   end
 
   def workflow_file?(path)
-    path.match?(%r{\A\.github/workflows/[^/]+\.ya?ml\z})
+    path.match?(WORKFLOW_FILE_PATTERN)
+  end
+
+  def list_managed_workflows(config)
+    managed_whole_files(config).select { |path| workflow_file?(path) }.uniq.sort.each do |path|
+      puts path if regular_file?(repo_path(path))
+    end
   end
 
   def reusable_pin_surface(path)
-    "#{path}:reusable-pins"
+    surface(path, "reusable-pins")
   end
 
   def changed_managed_surfaces(config)
@@ -835,7 +1141,7 @@ class FleetSync
     managed = []
     whole_files = configs.flat_map { |candidate| managed_whole_files(candidate) }.uniq
     changed_paths.each do |path|
-      managed << path if whole_files.include?(path)
+      managed << surface(path) if whole_files.include?(path)
     end
 
     managed_blocks = configs.flat_map { |candidate| guard_managed_blocks(candidate) }.uniq do |block|
@@ -855,7 +1161,7 @@ class FleetSync
       managed << reusable_pin_surface(path) if guard_base_reusable_pins(path) != current_reusable_pins(path)
     end
 
-    managed.uniq.sort
+    managed.uniq.sort_by(&:to_s)
   end
 
   def reject_consumer_fleet_config_edit
@@ -877,6 +1183,22 @@ class FleetSync
 
       raise FleetError, hidden_reusable_pin_message(path, hidden_pins)
     end
+  end
+
+  def reject_invalid_workflow_paths
+    guard_changed_paths.each do |path|
+      next unless path.start_with?(".github/workflows/") && path.end_with?(".yml", ".yaml")
+
+      validate_workflow_path(path)
+    end
+  end
+
+  def validate_managed_path_ancestors(config)
+    configs = [guard_base_config, config].compact
+    paths = configs.flat_map do |candidate|
+      managed_whole_files(candidate) + guard_managed_blocks(candidate).map { |block| block.fetch(:path) }
+    end
+    paths.uniq.each { |path| repo_path(path) }
   end
 
   def reject_symlinked_workflow_paths(config)
@@ -916,7 +1238,7 @@ class FleetSync
     Pathname(path).descend do |ancestor|
       next if ancestor.to_s == path
 
-      full_ancestor = repo_path(ancestor)
+      full_ancestor = repo_path(ancestor.to_s)
       next unless full_ancestor.symlink?
 
       raise FleetError, symlinked_workflow_ancestor_message(path, ancestor.to_s)
@@ -937,7 +1259,7 @@ class FleetSync
       line_pins[[workflow, ref]] += 1
     end
 
-    yaml_reusable_pins(text).filter_map do |workflow, ref|
+    semantic_reusable_pins(text).filter_map do |workflow, ref|
       key = [workflow, ref]
       if line_pins[key].positive?
         line_pins[key] -= 1
@@ -948,23 +1270,79 @@ class FleetSync
     end
   end
 
-  def yaml_reusable_pins(text)
-    collect_yaml_reusable_pins(YAML.safe_load(text, permitted_classes: [], aliases: false))
+  def semantic_reusable_pins(text)
+    workflow_job_uses_nodes(text).filter_map do |_key, value|
+      match = value.value.match(REUSABLE_WORKFLOW_VALUE_PATTERN)
+      match && [match[:workflow], match[:ref]]
+    end
   rescue Psych::Exception
     []
   end
 
-  def collect_yaml_reusable_pins(node)
-    case node
-    when Hash
-      node.flat_map { |key, value| collect_yaml_reusable_pins(key) + collect_yaml_reusable_pins(value) }
-    when Array
-      node.flat_map { |entry| collect_yaml_reusable_pins(entry) }
-    when String
-      match = node.match(REUSABLE_WORKFLOW_VALUE_PATTERN)
-      match ? [[match[:workflow], match[:ref]]] : []
-    else
-      []
+  def reusable_workflow_calls(text)
+    lines = text.lines
+    workflow_job_uses_nodes(text).filter_map do |_key, value|
+      value_match = value.value.match(REUSABLE_WORKFLOW_VALUE_PATTERN)
+      next unless value_match
+
+      line = lines.fetch(value.start_line, "").delete_suffix("\n")
+      line_match = line.match(REUSABLE_WORKFLOW_USES_PATTERN)
+      next unless line_match && line_match[:workflow] == value_match[:workflow] && line_match[:ref] == value_match[:ref]
+
+      WorkflowCall.new(
+        workflow: value_match[:workflow],
+        ref: value_match[:ref],
+        comment: line_match[:comment].strip,
+        line: value.start_line
+      )
+    end
+  rescue Psych::Exception => e
+    raise FleetError, "workflow YAML could not be parsed: #{e.message}"
+  end
+
+  def workflow_job_uses_nodes(text)
+    stream = Psych.parse_stream(text)
+    raise FleetError, "workflow YAML must contain exactly one document" unless stream.children.one?
+
+    root = stream.children.first.root
+    return [] unless root.is_a?(Psych::Nodes::Mapping)
+
+    jobs = mapping_values(root, "jobs")
+    return [] if jobs.empty?
+    raise FleetError, "workflow YAML must contain only one jobs mapping" unless jobs.one?
+    raise FleetError, "workflow YAML jobs must be a direct mapping" unless jobs.first.is_a?(Psych::Nodes::Mapping)
+
+    job_ids = jobs.first.children.each_slice(2).map do |job_id, _job|
+      raise FleetError, "workflow YAML job IDs must be scalar values" unless job_id.is_a?(Psych::Nodes::Scalar)
+
+      job_id.value
+    end
+    duplicates = job_ids.tally.select { |_job_id, count| count > 1 }.keys
+    raise FleetError, "workflow YAML contains duplicate job IDs: #{duplicates.sort.join(", ")}" if duplicates.any?
+
+    jobs.first.children.each_slice(2).flat_map do |job_name, job|
+      unless job.is_a?(Psych::Nodes::Mapping)
+        raise FleetError, "workflow job #{job_name.value} must be a direct mapping"
+      end
+      raise FleetError, "workflow job #{job_name.value} must not use a YAML merge key" if mapping_pairs(job, "<<").any?
+
+      uses = mapping_pairs(job, "uses")
+      raise FleetError, "workflow job must contain at most one uses key" if uses.length > 1
+      if uses.any? && !uses.first.last.is_a?(Psych::Nodes::Scalar)
+        raise FleetError, "workflow job uses must be a direct scalar"
+      end
+
+      uses
+    end
+  end
+
+  def mapping_values(mapping, name)
+    mapping_pairs(mapping, name).map(&:last)
+  end
+
+  def mapping_pairs(mapping, name)
+    mapping.children.each_slice(2).select do |key, _value|
+      key.is_a?(Psych::Nodes::Scalar) && key.value == name
     end
   end
 
@@ -972,7 +1350,7 @@ class FleetSync
     managed_blocks = guard_managed_blocks(config).map do |block|
       block_surface(block)
     end
-    managed_whole_files(config) + managed_blocks
+    managed_whole_files(config).map { |path| surface(path) } + managed_blocks
   end
 
   def managed_whole_files(config)
@@ -987,7 +1365,7 @@ class FleetSync
     files << ".github/workflows/zizmor.yml" unless exception?(config, "zizmor")
     files << ".github/workflows/pinprick-audit.yml" unless exception?(config, "pinprick-audit")
     files << ".github/workflows/link-check.yml" if params["link-check"]
-    files << ".github/workflows/codeql.yml" if (params["codeql"] || {})["languages"]
+    files << ".github/workflows/codeql.yml" if (params["codeql"] || {})["languages"] && !exception?(config, "codeql")
     files
   end
 
@@ -1010,13 +1388,18 @@ class FleetSync
   end
 
   def block_surface(block)
-    "#{block.fetch(:path)}:#{block.fetch(:name)}"
+    surface(block.fetch(:path), block.fetch(:name))
   end
 
   # A managed block must appear exactly once: guard and renderer both act on the
   # first marker match, so a duplicate could hide an edit behind the first copy.
   def assert_unique_marked_blocks(config)
-    guard_managed_blocks(config).each do |block|
+    configs = [config]
+    configs << guard_base_config if @guard_base
+    blocks = configs.compact.flat_map { |candidate| guard_managed_blocks(candidate) }.uniq do |block|
+      [block.fetch(:path), block.fetch(:name), block.fetch(:style)]
+    end
+    blocks.each do |block|
       path = repo_path(block.fetch(:path))
       next unless managed_path_present?(path)
 
@@ -1205,11 +1588,17 @@ class FleetSync
 
   def guard_base_workflow_files
     stdout, stderr, status = Open3.capture3(
-      "git", "-C", @repo_root.to_s, "ls-tree", "-r", "--name-only", guard_merge_base, "--", ".github/workflows"
+      "git", "-C", @repo_root.to_s, "ls-tree", "-r", "-z", "--name-only", guard_merge_base, "--",
+      ".github/workflows"
     )
     raise FleetError, "could not list guard base workflows: #{stderr.strip}" unless status.success?
 
-    stdout.lines(chomp: true).select { |path| workflow_file?(path) }
+    stdout.split("\0").reject(&:empty?).filter_map do |path|
+      next unless path.end_with?(".yml", ".yaml")
+
+      validate_workflow_path(path)
+      path
+    end
   end
 
   def guard_base_config
@@ -1244,12 +1633,9 @@ class FleetSync
   def reusable_pins_from_text(text)
     return [] if text.nil?
 
-    text.each_line.filter_map do |line|
-      match = line.delete_suffix("\n").match(REUSABLE_WORKFLOW_USES_PATTERN)
-      next unless match
-
-      [match[:workflow], match[:ref], match[:comment].strip]
-    end
+    reusable_workflow_calls(text).map { |call| [call.workflow, call.ref, call.comment] }
+  rescue Psych::Exception
+    []
   end
 
   def marked_block_from_text(text, block_name, style)
@@ -1341,7 +1727,7 @@ class FleetSync
         raise FleetError, "#{relative_path} is missing fleet:block #{block_name}"
       end
 
-    write_file(relative_path, next_content, "#{relative_path}:#{block_name}")
+    write_file(relative_path, next_content, surface(relative_path, block_name))
   end
 
   def fenced_block(block_name, style, body)
@@ -1381,10 +1767,14 @@ class FleetSync
     current = regular_file?(path) ? read_path(path) : nil
     return if current == content
 
-    @changes << surface
+    @changes << normalize_surface(surface, relative_path)
     return if @check
 
-    FileUtils.mkdir_p(path.dirname)
+    if managed_path_present?(path) && !path.symlink? && !regular_file?(path)
+      raise FleetError, non_regular_file_message(relative_path)
+    end
+
+    create_parent_directories(path, @repo_root)
     File.unlink(path) if path.symlink?
     write_path(path, content)
   end
@@ -1394,7 +1784,7 @@ class FleetSync
     return unless regular_file?(path)
 
     if @check
-      @changes << relative_path unless path.executable?
+      @changes << surface(relative_path) unless path.executable?
       return
     end
 
@@ -1412,24 +1802,62 @@ class FleetSync
     @reusable_pin ||= [version_commit(fleet_version) || ENV["FLEET_HUB_SHA"] || git_hub_sha, fleet_version]
   end
 
+  def verify_publication_release
+    assert_clean_git_worktree(@hub_root, "release")
+    target = FleetVersion.verify_tag(
+      repository: @hub_root.to_s,
+      version_file: hub_path("VERSION").to_s,
+      main_ref: @main_ref
+    )
+    release_head = git_hub_sha
+    unless release_head == target
+      raise FleetError,
+            "publication release HEAD #{release_head} is not the #{fleet_version} release commit #{target}"
+    end
+
+    @publication_commit = target
+  rescue FleetVersion::Error => e
+    raise FleetError, e.message
+  end
+
   def version_commit(version)
+    return @publication_commit if @publish && @publication_commit
+
     @version_commits ||= {}
     return @version_commits[version] if @version_commits.key?(version)
 
-    stdout, _stderr, status = Open3.capture3("git", "-C", @hub_root.to_s, "rev-list", "-n1", "refs/tags/#{version}")
+    stdout, _stderr, status = Open3.capture3(
+      "git", "-C", @hub_root.to_s, "rev-list", "-n1", "refs/tags/#{version}"
+    )
     sha = stdout.strip
     @version_commits[version] = status.success? && !sha.empty? ? sha : nil
   end
 
   def fleet_version
-    @fleet_version ||= read_path(hub_path("VERSION")).strip
+    @fleet_version ||= FleetVersion.parse(read_path(hub_path("VERSION")), source: "fleet/VERSION").text
+  rescue FleetVersion::Error => e
+    raise FleetError, e.message
   end
 
   def git_hub_sha
-    stdout, status = Open3.capture2("git", "-C", @hub_root.to_s, "rev-parse", "HEAD")
-    raise FleetError, "could not resolve hub git SHA" unless status.success?
+    git_repository_sha(@hub_root)
+  end
+
+  def git_repository_sha(repository)
+    stdout, status = Open3.capture2("git", "-C", repository.to_s, "rev-parse", "HEAD")
+    raise FleetError, "could not resolve git SHA for #{repository}" unless status.success?
 
     stdout.strip
+  end
+
+  def assert_clean_git_worktree(repository, label)
+    stdout, status = Open3.capture2(
+      "git", "-C", repository.to_s, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+    )
+    raise FleetError, "could not inspect publication #{label} checkout" unless status.success?
+    return if stdout.empty?
+
+    raise FleetError, "publication #{label} checkout contains uncommitted files"
   end
 
   def default_codeql_runner(languages)
@@ -1461,19 +1889,30 @@ class FleetSync
   end
 
   def repo_path(relative)
-    @repo_root.join(relative)
+    safe_join(@repo_root, relative, "consumer path")
   end
 
   def hub_path(relative)
-    @hub_root.join("fleet", relative)
+    safe_join(@hub_root.join("fleet"), relative, "fleet canonical path")
   end
 
   def regular_file?(path)
-    !path.symlink? && path.file?
+    File.lstat(path).file?
+  rescue Errno::ENOENT, Errno::ENOTDIR
+    false
+  end
+
+  def real_directory?(path)
+    File.lstat(path).directory?
+  rescue Errno::ENOENT, Errno::ENOTDIR
+    false
   end
 
   def managed_path_present?(path)
-    path.exist? || path.symlink?
+    File.lstat(path)
+    true
+  rescue Errno::ENOENT, Errno::ENOTDIR
+    false
   end
 
   def non_regular_file_message(relative_path)
@@ -1481,11 +1920,83 @@ class FleetSync
   end
 
   def read_path(path)
+    raise FleetError, "#{path} is not a regular file" unless regular_file?(path)
+
     File.read(path.to_s, encoding: "UTF-8")
   end
 
   def write_path(path, content)
     File.write(path.to_s, content, encoding: "UTF-8")
+  end
+
+  def surface(path, label = nil)
+    Surface.new(path: path, label: label)
+  end
+
+  def normalize_surface(value, default_path)
+    return value if value.is_a?(Surface)
+
+    label = value unless value == default_path
+    surface(default_path, label)
+  end
+
+  def validate_roots
+    validate_root(@repo_root, "--repo-root")
+    validate_root(@hub_root, "--hub-root")
+    validate_root(@hub_root.join("fleet"), "fleet canonical root")
+  end
+
+  def validate_root(root, label)
+    return if real_directory?(root)
+
+    raise FleetError, "#{label} must be a real directory, not a symlink"
+  end
+
+  def safe_join(root, relative, label)
+    validate_relative_path(relative, label)
+    components = relative.split("/")
+    current = root
+    components[0...-1].each do |component|
+      current = current.join(component)
+      next unless managed_path_present?(current)
+      next if real_directory?(current)
+
+      ancestor = current.relative_path_from(root).to_s
+      if current.symlink? && relative.start_with?(".github/workflows/")
+        raise FleetError, symlinked_workflow_ancestor_message(relative, ancestor)
+      end
+
+      raise FleetError, "#{relative} has non-directory or symlinked ancestor #{ancestor}"
+    end
+    root.join(*components)
+  end
+
+  def validate_relative_path(relative, label)
+    unless relative.is_a?(String) && !relative.empty? && !Pathname(relative).absolute? &&
+           Pathname(relative).cleanpath.to_s == relative &&
+           relative.split("/").none? { |component| component.empty? || %w[. ..].include?(component) } &&
+           !control_char?(relative)
+      raise FleetError, "#{label} must be a clean relative path without control characters"
+    end
+  end
+
+  def validate_workflow_path(path)
+    return if path.match?(WORKFLOW_FILE_PATTERN) && !control_char?(path)
+
+    raise FleetError,
+          "#{path.inspect} must be an immediate .github/workflows child with a portable .yml or .yaml filename"
+  end
+
+  def create_parent_directories(path, root)
+    relative = path.relative_path_from(root).to_s
+    current = root
+    relative.split("/")[0...-1].each do |component|
+      current = current.join(component)
+      Dir.mkdir(current) unless managed_path_present?(current)
+      next if real_directory?(current)
+
+      raise FleetError, "#{relative} has non-directory or symlinked ancestor #{current.relative_path_from(root)}"
+    end
   end
 end
 
@@ -1496,7 +2007,12 @@ options = {
   check: false,
   guard_base: nil,
   hub: false,
-  adopt: false
+  adopt: false,
+  publish: false,
+  publication_preflight: false,
+  validate_only: false,
+  list_managed_workflows: false,
+  main_ref: nil
 }
 
 OptionParser.new do |parser|
@@ -1509,6 +2025,21 @@ OptionParser.new do |parser|
     options[:adopt] = true
   end
   parser.on("--hub", "Treat this repository as the canonical fleet hub") { options[:hub] = true }
+  parser.on("--publish", "Require the exact authenticated fleet release tag used for publication") do
+    options[:publish] = true
+  end
+  parser.on("--publication-preflight", "Authenticate and validate publication inputs without writing") do
+    options[:publication_preflight] = true
+  end
+  parser.on("--main-ref REF", "Trusted main commit that must contain the publication release") do |value|
+    options[:main_ref] = value
+  end
+  parser.on("--validate-only", "Validate fleet registry and repository configuration without rendering") do
+    options[:validate_only] = true
+  end
+  parser.on("--list-managed-workflows", "List existing workflows whose complete contents fleet renders") do
+    options[:list_managed_workflows] = true
+  end
   parser.on("--guard BASE_REF", "Reject unmanaged edits to fleet-managed surfaces") do |value|
     options[:guard_base] = value
   end

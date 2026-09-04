@@ -21,6 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
 
       - name: Set up Ruby
@@ -29,17 +31,51 @@ jobs:
           working-directory: fleet
           bundler-cache: true
 
+      - name: Install actionlint
+        env:
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          archive="${RUNNER_TEMP}/actionlint.tar.gz"
+          curl --fail --location --silent --show-error \
+            --output "${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "${archive}" -C "${RUNNER_TEMP}" actionlint
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Set up Node for Renovate validation
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.11.0
+          package-manager-cache: false
+
+      - name: Install Renovate validator
+        env:
+          npm_config_registry: https://registry.npmjs.org/
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund --prefix fleet/validator
+          echo "FLEET_RENOVATE_VALIDATOR=${GITHUB_WORKSPACE}/fleet/validator/node_modules/.bin/renovate-config-validator" >> "${GITHUB_ENV}"
+
       - name: Check renderer and templates
         run: |
           ruby -c fleet/sync.rb
+          ruby -c fleet/version.rb
+          ruby -c fleet/pr_identity.rb
           ruby -rerb -ryaml -e '
             Dir["fleet/templates/*.erb"].each do |template|
               ERB.new(File.read(template, encoding: "UTF-8"), trim_mode: "-")
             end
-            Dir[".github/workflows/*.yml"].each do |workflow|
+            Dir[".github/workflows/*.{yml,yaml}"].each do |workflow|
               YAML.safe_load(File.read(workflow, encoding: "UTF-8"), permitted_classes: [], aliases: false)
             end
           '
+          actionlint -ignore 'reusable workflow call "\$/\.github/workflows/(reusable-conventional-commits|fleet-validate|reusable-zizmor)\.yml"'
+
+      - name: Validate Renovate preset
+        working-directory: ${{ runner.temp }}
+        run: >-
+          "${FLEET_RENOVATE_VALIDATOR}" --strict --no-global
+          "${GITHUB_WORKSPACE}/renovate-config.json"
 
       - name: Run test suites
         env:
@@ -56,7 +92,20 @@ jobs:
         run: |
           ruby -ryaml -rjson -e '
             data = YAML.safe_load(File.read("fleet/repos.yml"), permitted_classes: [], aliases: false)
-            matrix = { include: data.fetch("repos").map { |repo| { repo: repo } } }
+            matrix = {
+              include: data.fetch("repos").map do |repo|
+                system("ruby", "fleet/sync.rb", "--repo-name", repo, "--validate-only") ||
+                  abort("invalid fleet config: #{repo}")
+                config = YAML.safe_load(
+                  File.read("fleet/repos/#{repo}.yml"), permitted_classes: [], aliases: false
+                )
+                {
+                  repo: repo,
+                  visibility: config.fetch("visibility"),
+                  renovate: config.fetch("params", {}).fetch("renovate", false)
+                }
+              end
+            }
             File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |file| file.puts("matrix=#{JSON.generate(matrix)}") }
           '
 
@@ -83,6 +132,18 @@ jobs:
         with:
           working-directory: hub/fleet
 
+      - name: Install actionlint
+        env:
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          archive="${RUNNER_TEMP}/actionlint.tar.gz"
+          curl --fail --location --silent --show-error \
+            --output "${archive}" \
+            "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "${archive}" -C "${RUNNER_TEMP}" actionlint
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
       - name: Checkout consumer
         id: clone
         continue-on-error: true
@@ -93,12 +154,34 @@ jobs:
           persist-credentials: false
 
       - name: Note skipped consumer
-        if: steps.clone.outcome == 'failure'
+        if: steps.clone.outcome == 'failure' && matrix.visibility == 'private'
         env:
           REPO_NAME: ${{ matrix.repo }}
         run: |
           # The pull_request token cannot read private consumers; the real sync validates those.
           echo "::notice::skipping ${REPO_NAME}: not readable from a pull_request run"
+
+      - name: Reject unreadable public consumer
+        if: steps.clone.outcome == 'failure' && matrix.visibility == 'public'
+        env:
+          REPO_NAME: ${{ matrix.repo }}
+        run: |
+          echo "::error::public fleet consumer ${REPO_NAME} could not be checked out"
+          exit 1
+
+      - name: Set up Node for Renovate validation
+        if: steps.clone.outcome == 'success' && matrix.renovate
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.11.0
+          package-manager-cache: false
+
+      - name: Install Renovate validator
+        if: steps.clone.outcome == 'success' && matrix.renovate
+        env:
+          npm_config_cache: ${{ runner.temp }}/renovate-npm-cache
+          npm_config_registry: https://registry.npmjs.org/
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix hub/fleet/validator
 
       - name: Render and require idempotence
         if: steps.clone.outcome == 'success'
@@ -115,3 +198,31 @@ jobs:
         run: |
           git add -A
           git diff --cached --check
+
+      - name: Lint rendered workflows
+        if: steps.clone.outcome == 'success'
+        working-directory: repo
+        env:
+          REPO_NAME: ${{ matrix.repo }}
+        run: |
+          workflow_manifest="${RUNNER_TEMP}/fleet-managed-workflows"
+          ruby ../hub/fleet/sync.rb \
+            --hub-root ../hub \
+            --repo-root . \
+            --repo-name "${REPO_NAME}" \
+            --list-managed-workflows > "${workflow_manifest}"
+          mapfile -t workflow_paths < "${workflow_manifest}"
+          if (( ${#workflow_paths[@]} == 0 )); then
+            echo "No fleet-managed workflows to lint."
+            exit 0
+          fi
+          actionlint \
+            -ignore 'reusable workflow call "\$/\.github/workflows/(reusable-conventional-commits|fleet-validate|reusable-zizmor)\.yml"' \
+            "${workflow_paths[@]}"
+
+      - name: Validate rendered Renovate stub
+        if: steps.clone.outcome == 'success' && matrix.renovate
+        working-directory: ${{ runner.temp }}
+        run: >-
+          "${GITHUB_WORKSPACE}/hub/fleet/validator/node_modules/.bin/renovate-config-validator"
+          --strict --no-global "${GITHUB_WORKSPACE}/repo/renovate.json"
