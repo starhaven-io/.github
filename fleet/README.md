@@ -71,6 +71,11 @@ established first-party reusable workflow call within its workflow file.
 Triggers, conditions, matrices, inputs, dependency edges, and surrounding job
 logic remain repo-owned.
 
+The organization-required `.github/workflows/fleet-guard-required.yml` runs
+from trusted hub `main` against pull requests. It enforces DCO sign-offs for
+human-authored commits and guards fleet-managed surfaces independently of the
+consumer's pull-request tree.
+
 ## Marker Convention
 
 Tier 2 fences use the host file's comment syntax:
@@ -389,12 +394,12 @@ from a trusted ref.
   be treated as contained by SHA pins alone.
 - The org Actions policy implicitly allows same-org actions and reusable
   workflows; the explicit allowlist is reserved for third-party trust grants.
-- The org-ruleset required guard (`fleet-guard-required.yml`) deliberately
-  runs the renderer from hub `main` against consumer pull requests so
-  hardening applies without waiting for a release. Residual risk: a
-  compromised hub `main` executes Ruby in consumer PR context, mitigated by
-  a contents-read-only token, no secrets in that context, and hub `main`
-  itself requiring reviewed pull requests.
+- The org-ruleset required workflow (`fleet-guard-required.yml`) deliberately
+  runs DCO enforcement and the renderer from hub `main` against pull requests
+  so hardening applies without waiting for a release. Residual risk: a
+  compromised hub `main` executes Ruby in consumer PR context, mitigated by a
+  contents-read-only token, no secrets in that context, and hub `main` itself
+  requiring reviewed pull requests.
 
 ## Running Locally
 
