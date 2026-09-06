@@ -1,10 +1,11 @@
 name: Fleet Guard (required)
 
 # Enforced org-wide by the "Require Fleet Guard" ruleset in orrery, which runs
-# this file from starhaven-io/.github@main against consumer PRs. Because the
-# definition comes from the owner-only hub, not the PR tree, a fork PR cannot
-# fake or skip it. Running current main also applies renderer hardening
-# immediately, without waiting for a release to bump consumers' caller pins.
+# this file from starhaven-io/.github@main against organization PRs. Because
+# the definition comes from the owner-only hub, not the PR tree, a fork PR
+# cannot fake or skip its DCO or fleet checks. Running current main also applies
+# renderer hardening immediately, without waiting for a release to bump
+# consumers' caller pins.
 
 on:
   pull_request:
@@ -20,6 +21,82 @@ defaults:
     shell: bash -euo pipefail {0}
 
 jobs:
+  dco:
+    name: DCO
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check actor exemption
+        id: exemption
+        env:
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [[ "${ACTOR}" == "starhaven-bot[bot]" || "${ACTOR}" == "dependabot[bot]" ]]; then
+            echo "exempt=true" >> "${GITHUB_OUTPUT}"
+            echo "::notice::DCO check is not required for trusted automation"
+          else
+            echo "exempt=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Checkout contribution
+        if: steps.exemption.outputs.exempt != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check DCO sign-offs
+        if: steps.exemption.outputs.exempt != 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          for name in BASE_SHA HEAD_SHA; do
+            value="${!name}"
+            if [[ ! "${value}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::${name} must be a full lowercase commit SHA"
+              exit 1
+            fi
+          done
+
+          if ! commit_list="$(git rev-list --reverse "${BASE_SHA}..${HEAD_SHA}")"; then
+            echo "::error::Could not enumerate pull request commits"
+            exit 1
+          fi
+          if [[ -z "${commit_list}" ]]; then
+            echo "::error::No pull request commits were found"
+            exit 1
+          fi
+
+          failed=0
+          while IFS= read -r commit; do
+            read -r -a parents <<< "$(git rev-list --parents -n 1 "${commit}")"
+            if (( ${#parents[@]} > 2 )); then
+              continue
+            fi
+
+            if ! trailers="$(
+              git show -s --format=%B "${commit}" \
+                | git interpret-trailers --parse --no-divider
+            )"; then
+              echo "::error::Could not inspect DCO trailers for commit ${commit}"
+              failed=1
+              continue
+            fi
+
+            author="$(git show -s --format='%an <%ae>' "${commit}")"
+            if grep -Fqx -- "Signed-off-by: ${author}" <<< "${trailers}"; then
+              continue
+            fi
+
+            echo "::error::Commit ${commit} lacks a Signed-off-by trailer matching its author"
+            failed=1
+          done <<< "${commit_list}"
+
+          exit "${failed}"
+
   guard:
     name: Guard
     # The hub guards its own PRs in-tree with --hub; this required workflow is
