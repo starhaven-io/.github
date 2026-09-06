@@ -69,6 +69,22 @@
       "datasourceTemplate": "github-releases",
       "versioningTemplate": "semver",
       "extractVersionTemplate": "^v(?<version>.*)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Update lychee's release archive SHA-256 and the literal download URL together.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "LYCHEE_SHA256:\\s*\"(?<currentDigest>[a-f0-9]{64})\"(?<between>[\\s\\S]*?)releases/download/lychee-v(?<currentValue>\\d+(?:\\.\\d+){2})/lychee-x86_64-unknown-linux-gnu\\.tar\\.gz"
+      ],
+      "depNameTemplate": "lychee",
+      "packageNameTemplate": "lycheeverse/lychee",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver",
+      "extractVersionTemplate": "^lychee-v(?<version>.*)$",
+      "autoReplaceStringTemplate": "LYCHEE_SHA256: \"{{{newDigest}}}\"{{{between}}}releases/download/lychee-v{{{newValue}}}/lychee-x86_64-unknown-linux-gnu.tar.gz"
     }
   ]
 }
