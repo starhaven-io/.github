@@ -158,7 +158,7 @@ params:
 ```
 
 The `npm-policy` param opts a consumer into the deny-by-default install-script
-policy ahead of npm 12. It syncs `scripts/check-npm-install-policy.mjs` and
+policy. It syncs `scripts/check-npm-install-policy.mjs` and
 renders the `npm-policy` justfile recipe, parameterized by the project
 directories the checker validates:
 
@@ -172,7 +172,8 @@ The recipe renders into a repo-owned `# fleet:block npm-policy` fence in the
 `justfile`, so a consumer must carry that fence before it is enabled, the same
 as the other justfile blocks. The per-package `allowScripts` map in each
 `package.json` and repo-specific CI and deploy integration stay repo-owned. The
-shared link-check workflow runs the checker against the configured site
+checker requires a lockfile with a `packages` mapping (lockfile versions 2 or 3).
+The shared link-check workflow runs the checker against the configured site
 directory before either `npm ci --strict-allow-scripts` path. Configuration
 validation requires every built site directory to be enrolled in
 `npm-policy.projects`.
@@ -289,11 +290,11 @@ repo-owned workflows remain the consumer's own CI responsibility. Ephemeral
 release-PR validation can propose a new version, while publication requires the
 real authenticated tag.
 
-Consumer Dependabot and the shared Renovate preset enforce the seven-day age
-gate for their eligible third-party updates. Same-organization actions are
-explicitly excluded from Dependabot's cooldown: first-party changes instead
-cross the reviewed, immutable fleet release boundary. Dependabot never writes
-fleet pins.
+Consumer Dependabot and the shared Renovate preset set a seven-day age gate
+for eligible third-party updates. The Dependabot template exempts same-organization
+actions and `ruby/setup-ruby`, which must recognize each requested Ruby version.
+Fleet workflow pins instead cross the immutable fleet release boundary;
+Dependabot never writes them.
 
 Fleet releases are cut through `fleet-release.yml`. Manual dispatch opens a
 release PR that bumps `fleet/VERSION` to the next Pacific CalVer tag name. The
@@ -385,10 +386,15 @@ from a trusted ref.
 ## Security Posture
 
 - Hub branch, tag, environment, and required-check rules are external
-  prerequisites: this repository cannot prove their live installation. They
-  should require reviewed hub PRs, block force-pushes and tag deletion, reserve
-  `v*` tag creation for the release App, and protect the `starhaven`
-  environment.
+  prerequisites: this repository cannot prove their live installation. Inspect
+  effective GitHub rulesets and environment deployment policies to confirm that
+  hub changes require PRs and passing checks, force-pushes and tag deletion are
+  blocked, and `v*` tag creation is reserved for the release App. The `starhaven`
+  environment must admit only `main` branch deployments, excluding tags, so a
+  dispatch from another ref cannot receive App credentials. A sole maintainer
+  reviews and merges through these gates; self-approval adds no independent
+  security boundary. Reconsider independent review when another maintainer can
+  provide it.
 - Hub `main` is a high-trust boundary because its scheduled workflows can mint
   repository-scoped App tokens. Consumer changes still arrive through signed
   commits and required-check-gated PRs, but a compromised hub workflow must not

@@ -14,7 +14,7 @@ brew install brewy
 
 ### [macOSdb](https://github.com/starhaven-io/macOSdb)
 
-A catalog of which versions of open-source components — `curl`, `OpenSSH`, `LibreSSL`, `Swift`, `Apple Clang`, and more — ship with each macOS and Xcode release. Native app, CLI, and a REST API at [macosdb.com](https://macosdb.com).
+A catalog of which versions of open-source components — `curl`, `OpenSSH`, `LibreSSL`, `Swift`, `Apple Clang`, and more — ship with each macOS and Xcode release. CLI, website, and a REST API at [macosdb.com](https://macosdb.com).
 
 ```sh
 brew install starhaven-io/tap/macosdb
@@ -39,6 +39,10 @@ brew install starhaven-io/tap/pinprick
 ### [pkgstory](https://github.com/starhaven-io/pkgstory)
 
 Every package has a version story. pkgstory mines a package manager's git history into a browsable timeline — which version shipped, and when — for every Homebrew formula and cask. Deprecated, disabled, and removed packages are recorded with the date and Homebrew's own reason, instead of trailing off at a stale last version. The whole catalog is searchable, with a per-package RSS feed, live at [pkgstory.dev](https://pkgstory.dev).
+
+### [rakkan](https://github.com/starhaven-io/rakkan)
+
+Tracks trusted publishing adoption across package registries using provenance accepted by each registry. Explore adoption among frequently downloaded packages and how it changes over time at [rakkan.dev](https://rakkan.dev).
 
 ## Distribution
 

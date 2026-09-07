@@ -34,6 +34,7 @@ Markdown-only profile repository.
   check. Missing local tools count as failures with install hints.
 - Run `BUNDLE_GEMFILE=fleet/Gemfile bundle install` once per clone so the test
   and lint steps run instead of being skipped.
+- The fleet tests also require Node.js to exercise the shared npm policy checker.
 - Run `just install-hooks` once per clone so DCO sign-off and pre-push checks
   are active.
 - Review the rendered Markdown shape of any changed `.md` file, especially
@@ -75,7 +76,7 @@ Top level:
   content, and tier-3 ERB templates.
 - `validator/`: the locked Renovate CLI used to validate the shared preset and
   every rendered adopter stub in CI.
-- `test/`: the commit-msg hook tests, the guard and renderer regression suite,
+- `test/`: hook and npm policy tests, the guard and renderer regression suite,
   the DCO, conclusion, and conventional-commits workflow contract tests, and
   golden-render tests that render every consumer config into a synthetic
   skeleton; run them through the locked bundle (`just tests`).
@@ -154,10 +155,11 @@ change, not part of adoption.
 suppressed updates are visible only in Mend's run log; eligible PRs retain the
 `Pending` column and rebase/retry controls.
 
-On an adopter's first hosted PR, manually confirm that the `Signed-off-by`
-trailer is present and non-empty, its identity matches the commit author, and
-GitHub marks the commit `Verified`. No estate check currently enforces that
-identity match. Keep cargo workflow pins in the canonical single-spaced form
+The trusted `dco-required.yml` workflow checks that each non-merge commit has a
+`Signed-off-by` trailer matching its author, including Renovate commits. Verify
+that the required workflow and signed-commit rules are installed in the adopter's
+effective GitHub rulesets; local configuration cannot prove their enforcement.
+Keep cargo workflow pins in the canonical single-spaced form
 `cargo install <tool> --locked --version <version>` so the deliberately narrow
 regex manager can see them.
 

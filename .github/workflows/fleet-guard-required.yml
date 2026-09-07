@@ -1,11 +1,8 @@
 name: Fleet Guard (required)
 
-# Enforced org-wide by the "Require Fleet Guard" ruleset in orrery, which runs
-# this file from starhaven-io/.github@main against organization PRs. Because
-# the definition comes from the owner-only hub, not the PR tree, a fork PR
-# cannot fake or skip its fleet check. Running current main also applies renderer
-# hardening immediately, without waiting for a release to bump consumers' caller
-# pins. DCO is enforced separately by dco-required.yml.
+# The organization ruleset sources this workflow and its renderer from trusted
+# hub main, so pull-request code cannot weaken it and fixes do not wait for a
+# fleet release. DCO is enforced separately by dco-required.yml.
 
 on:
   pull_request:

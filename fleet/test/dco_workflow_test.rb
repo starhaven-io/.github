@@ -11,9 +11,14 @@ DCO_WORKFLOW = File.join(DCO_ROOT, ".github/workflows/dco-required.yml")
 
 class DcoWorkflowTest < Minitest::Test
   def setup
+    @sandbox = Dir.mktmpdir("dco-workflow-test-")
     workflow = YAML.safe_load_file(DCO_WORKFLOW, permitted_classes: [], aliases: false)
     @steps = workflow.fetch("jobs").fetch("dco").fetch("steps")
     @script = @steps.find { |step| step["name"] == "Check DCO sign-offs" }.fetch("run")
+  end
+
+  def teardown
+    FileUtils.remove_entry(@sandbox)
   end
 
   def test_matching_author_signoff_passes
@@ -175,10 +180,11 @@ class DcoWorkflowTest < Minitest::Test
   private
 
   def repository
-    repo = Dir.mktmpdir("dco-workflow-")
+    repo = Dir.mktmpdir("repo-", @sandbox)
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.name", "DCO Contributor")
     git(repo, "config", "user.email", "contributor@example.invalid")
+    git(repo, "config", "commit.gpgsign", "false")
     File.write(File.join(repo, "baseline"), "baseline\n")
     git(repo, "add", "baseline")
     git(repo, "commit", "-qm", "chore: unsigned baseline")
@@ -202,7 +208,7 @@ class DcoWorkflowTest < Minitest::Test
 
   def check(repo, base_ref, head, payload_base: nil, actor: "human-contributor", verified_dependabot_commits: [])
     payload_base ||= git(repo, "rev-parse", "refs/remotes/origin/#{base_ref}").strip
-    shim_dir = Dir.mktmpdir("dco-gh-")
+    shim_dir = Dir.mktmpdir("gh-", @sandbox)
     gh = File.join(shim_dir, "gh")
     File.write(gh, <<~SH)
       #!/usr/bin/env bash

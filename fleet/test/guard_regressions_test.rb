@@ -282,8 +282,6 @@ class GuardRegressionsTest < Minitest::Test
     assert_rejects(["sync", sync(repo), ".fleet.yml contains unknown keys: unexpected"])
   end
 
-  # codeql-languages was a pre-codeql-mapping compatibility alias; nothing in
-  # fleet/repos/*.yml uses it, so it must reject rather than silently render.
   def test_rejects_removed_codeql_languages_compatibility_key
     repo = scenario("codeql-languages-removed")
     config = fleet_config(repo)
@@ -909,9 +907,7 @@ class GuardRegressionsTest < Minitest::Test
     )
   end
 
-  # Regression: the 2026-07-05 sync rendered the managed `audit` recipe into a
-  # consumer justfile that already owned an `audit token:` recipe, and just
-  # treats both as recipe `audit`.
+  # just identifies recipes by name regardless of their parameters.
   def test_rejects_local_recipe_colliding_with_managed_just_recipe
     repo = scenario("just-recipe-collision")
     path = File.join(repo, "justfile")
@@ -1129,6 +1125,24 @@ class GuardRegressionsTest < Minitest::Test
       ["sync --adopt", sync(repo, "--adopt"), "AGENTS.md is missing fleet:block commit-and-pr-conventions"]
     )
     assert_equal 1, File.read(agents).scan(/^<!-- fleet:block commit-and-pr-conventions -->$/).length
+  end
+
+  def test_rejects_malformed_end_markers_without_consuming_a_later_block
+    {
+      "markdown" => ["AGENTS.md", "<!-- fleet:end -->", "<!-- fleet:end --> extra",
+                     "<!-- fleet:block other -->\nrepo-owned text\n<!-- fleet:end -->\n"],
+      "hash" => [".gitignore", "# fleet:end", "# fleet:ending",
+                 "# fleet:block other\nrepo-owned text\n# fleet:end\n"]
+    }.each do |style, (relative, ending, malformed, later_block)|
+      repo = scenario("malformed-end-#{style}")
+      path = File.join(repo, relative)
+      original = "#{File.read(path).sub(ending, malformed)}\n#{later_block}"
+      File.write(path, original)
+
+      assert_rejects(["--check", sync(repo, "--check"), "is missing fleet:block"])
+      assert_rejects(["sync", sync(repo), "is missing fleet:block"])
+      assert_equal original, File.read(path)
+    end
   end
 
   def test_rejects_adopt_combined_with_check_or_guard
@@ -1555,6 +1569,13 @@ class ConclusionContractTest < Minitest::Test
     assert_conclusion_failure(
       "FLEET_REQUIRED" => "true",
       "FLEET_RESULT" => "failure"
+    )
+  end
+
+  def test_dco_workflow_changes_run_the_workflow_contract_suite
+    assert_equal(
+      { "audit" => "true", "fleet" => "true" },
+      classify(".github/workflows/dco-required.yml")
     )
   end
 
