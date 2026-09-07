@@ -30,8 +30,8 @@ Tier 1:
 | File | Notes |
 |------|-------|
 | `.editorconfig` | all consumers |
-| `.githooks/commit-msg` | Claude/Codex trailer guard on all commits; DCO hook with fixup/squash/merge skip |
-| `.githooks/pre-push` | deletion-skip, just-guard, `just check` |
+| `.githooks/commit-msg` | AI trailer-key and identifier guard on all commits; DCO sign-off required on every commit, including fixup, squash, and merge |
+| `.githooks/pre-push` | tag- and deletion-only skip, exact clean `HEAD` for every other ref, just-guard, `just check` |
 | `CLAUDE.md` | exactly `@AGENTS.md` |
 | `LICENSE` | one canonical file per license type in `fleet/files/licenses/` |
 | `.mcp.json` | astro-docs config; consumers with `astro-docs: true` |

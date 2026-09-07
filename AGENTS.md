@@ -61,7 +61,8 @@ Top level:
 - `justfile`: `check`, `rubocop`, `tests`, `lychee`, and `install-hooks`
   recipes, plus fleet-managed `audit` and `pinprick-audit` recipe blocks.
 - `.githooks/`: `commit-msg` (rejects AI attribution trailers, requires DCO
-  sign-off) and `pre-push` (`just check`).
+  sign-off on every commit) and `pre-push` (exact clean `HEAD` for non-tag
+  refs, then `just check`).
 - `lychee.toml`: profile and community-health link-check configuration.
 - `.github/dependabot.yml`: Bundler (`/fleet`), npm (`/fleet/validator`), and
   GitHub Actions updates with a 7-day cooldown.

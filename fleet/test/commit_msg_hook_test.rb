@@ -64,12 +64,50 @@ class CommitMsgHookTest < Minitest::Test
     result = run_hook(<<~MESSAGE)
       feat: add a feature
 
-      Generated-by: CODEX
+      Co-authored-by: CODEX <codex@example.com>
       Signed-off-by: Accountable Contributor <accountable@example.com>
     MESSAGE
 
     refute result.success?
     assert_includes result.stderr, "trailer contains a known AI identifier"
+  end
+
+  def test_rejects_other_vendor_identifiers_in_any_trailer
+    [
+      "Co-authored-by: Copilot <copilot@github.com>",
+      "Reviewed-by: Gemini <gemini@google.com>",
+      "Signed-off-by: GPT-5 <gpt@example.com>",
+      "Co-authored-by: Cursor Agent <agent@cursor.com>"
+    ].each do |trailer|
+      result = run_hook(<<~MESSAGE)
+        feat: add a feature
+
+        #{trailer}
+        Signed-off-by: Accountable Contributor <accountable@example.com>
+      MESSAGE
+
+      refute result.success?, trailer
+      assert_includes result.stderr, "trailer contains a known AI identifier"
+    end
+  end
+
+  def test_rejects_ai_attribution_trailer_keys_even_for_humans
+    [
+      "Assisted-by: Alex Human <alex@example.com>",
+      "Co-developed-by: Alex Human <alex@example.com>",
+      "Generated-by: Internal Tool <tool@example.com>",
+      "Model: in-house"
+    ].each do |trailer|
+      result = run_hook(<<~MESSAGE)
+        feat: add a feature
+
+        #{trailer}
+        Signed-off-by: Accountable Contributor <accountable@example.com>
+      MESSAGE
+
+      refute result.success?, trailer
+      assert_includes result.stderr, "AI attribution trailer key is not allowed"
+    end
   end
 
   def test_rejects_ai_trailer_after_divider
@@ -88,7 +126,7 @@ class CommitMsgHookTest < Minitest::Test
     assert_includes result.stderr, "trailer contains a known AI identifier"
   end
 
-  def test_rejects_ai_trailers_on_dco_exempt_commits
+  def test_rejects_ai_trailers_on_autosquash_and_merge_subjects
     ["fixup! feat: base", "squash! feat: base", "Merge branch 'feature'"].each do |subject|
       result = run_hook(<<~MESSAGE)
         #{subject}
@@ -101,9 +139,22 @@ class CommitMsgHookTest < Minitest::Test
     end
   end
 
-  def test_preserves_dco_exempt_commits_without_ai_trailers
+  def test_requires_dco_signoff_on_autosquash_and_merge_subjects
     ["fixup! feat: base", "squash! feat: base", "Merge branch 'feature'"].each do |subject|
       result = run_hook("#{subject}\n")
+
+      refute result.success?, subject
+      assert_includes result.stderr, "missing DCO sign-off"
+    end
+  end
+
+  def test_accepts_signed_autosquash_and_merge_subjects
+    ["fixup! feat: base", "squash! feat: base", "Merge branch 'feature'"].each do |subject|
+      result = run_hook(<<~MESSAGE)
+        #{subject}
+
+        Signed-off-by: Accountable Contributor <accountable@example.com>
+      MESSAGE
 
       assert result.success?, "#{subject}: #{result.stderr}"
     end
