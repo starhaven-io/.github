@@ -74,7 +74,7 @@ jobs:
     name: Fleet guard
     permissions:
       contents: read
-    uses: starhaven-io/.github/.github/workflows/reusable-fleet-guard.yml@78b931b0780f83e92162f641956e95c116467036 # v2026.09.06.1
+    uses: starhaven-io/.github/.github/workflows/reusable-fleet-guard.yml@1dfa7e3fd45a0982180231823e60406bc80f0500 # v2026.09.06.2
     with:
       repo-name: ${{ github.event.repository.name }}
 
@@ -99,7 +99,7 @@ jobs:
     if: needs.changes.outputs.audit == 'true'
     permissions:
       contents: read
-    uses: starhaven-io/.github/.github/workflows/reusable-pinprick-audit.yml@78b931b0780f83e92162f641956e95c116467036 # v2026.09.06.1
+    uses: starhaven-io/.github/.github/workflows/reusable-pinprick-audit.yml@1dfa7e3fd45a0982180231823e60406bc80f0500 # v2026.09.06.2
     with:
       advanced-security: false
       fail-on-findings: true
