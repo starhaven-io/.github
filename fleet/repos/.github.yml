@@ -2,6 +2,7 @@ schema: 1
 visibility: "public"
 license: "mit"
 params:
+  renovate: true
   dependabot:
     - package-ecosystem: "bundler"
       group: "bundler-dependencies"
