@@ -88,6 +88,8 @@ Top level:
 - `fleet-validate.yml`: renderer syntax, tests, lint, and actionlint, plus a
   per-consumer dry-run render with an idempotence check.
 - `fleet-guard.yml`: this repo's own rendered guard caller.
+- `dco-required.yml`: run from `@main` by the org DCO ruleset against every
+  pull request; validates sign-offs independently of the pull-request tree.
 - `fleet-guard-required.yml`: run from `@main` by an org ruleset against
   consumer PRs; skips the hub itself.
 - `fleet-sync.yml`: runs from trusted `main`, authenticates and executes the

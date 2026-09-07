@@ -1,0 +1,118 @@
+name: DCO (required)
+
+# This workflow is sourced from trusted hub main by the organization DCO
+# ruleset so pull-request code cannot weaken its sign-off validation.
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: "dco-required-${{ github.ref }}"
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  dco:
+    name: DCO
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout contribution
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check DCO sign-offs
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ ! "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::HEAD_SHA must be a full lowercase commit SHA"
+            exit 1
+          fi
+          if ! git check-ref-format "refs/heads/${BASE_REF}" >/dev/null; then
+            echo "::error::Pull request base ref is invalid"
+            exit 1
+          fi
+
+          base_ref="refs/remotes/origin/${BASE_REF}"
+          if ! base_sha="$(git show-ref --verify --hash -- "${base_ref}")"; then
+            echo "::error::Could not resolve the current pull request base ref"
+            exit 1
+          fi
+          if [[ ! "${base_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Resolved base ref must be a full lowercase commit SHA"
+            exit 1
+          fi
+
+          if ! commit_list="$(git rev-list --reverse "${base_sha}..${HEAD_SHA}")"; then
+            echo "::error::Could not enumerate pull request commits"
+            exit 1
+          fi
+          if [[ -z "${commit_list}" ]]; then
+            echo "::error::No pull request commits were found"
+            exit 1
+          fi
+
+          failed=0
+          while IFS= read -r commit; do
+            read -r -a parents <<< "$(git rev-list --parents -n 1 "${commit}")"
+            if (( ${#parents[@]} > 2 )); then
+              continue
+            fi
+
+            if ! trailers="$(
+              git show -s --format=%B "${commit}" \
+                | git interpret-trailers --parse --no-divider
+            )"; then
+              echo "::error::Could not inspect DCO trailers for commit ${commit}"
+              failed=1
+              continue
+            fi
+
+            author="$(git show -s --format='%an <%ae>' "${commit}")"
+            if grep -Fqx -- "Signed-off-by: ${author}" <<< "${trailers}"; then
+              continue
+            fi
+            if [[ "${author}" == "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>" ]] &&
+              grep -Fqx -- "Signed-off-by: dependabot[bot] <support@github.com>" <<< "${trailers}"
+            then
+              if ! dependabot_provenance="$(
+                gh api "repos/${GITHUB_REPOSITORY}/commits/${commit}" --method GET --jq '
+                  .author.login == "dependabot[bot]" and
+                  .author.type == "Bot" and
+                  .committer.login == "web-flow" and
+                  .committer.type == "User" and
+                  .commit.author.name == "dependabot[bot]" and
+                  .commit.author.email == "49699333+dependabot[bot]@users.noreply.github.com" and
+                  .commit.committer.name == "GitHub" and
+                  .commit.committer.email == "noreply@github.com" and
+                  .commit.verification.verified == true and
+                  .commit.verification.reason == "valid"
+                '
+              )"; then
+                echo "::error::Could not verify Dependabot provenance for commit ${commit}"
+                failed=1
+                continue
+              fi
+              if [[ "${dependabot_provenance}" == "true" ]]; then
+                continue
+              fi
+            fi
+
+            echo "::error::Commit ${commit} lacks an accepted Signed-off-by trailer"
+            failed=1
+          done <<< "${commit_list}"
+
+          exit "${failed}"

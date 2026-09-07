@@ -7,7 +7,7 @@ require "yaml"
 require "minitest/autorun"
 
 DCO_ROOT = File.expand_path("../..", __dir__)
-DCO_WORKFLOW = File.join(DCO_ROOT, ".github/workflows/fleet-guard-required.yml")
+DCO_WORKFLOW = File.join(DCO_ROOT, ".github/workflows/dco-required.yml")
 
 class DcoWorkflowTest < Minitest::Test
   def setup
