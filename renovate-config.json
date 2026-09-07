@@ -77,14 +77,13 @@
         "/^\\.github/workflows/[^/]+\\.ya?ml$/"
       ],
       "matchStrings": [
-        "LYCHEE_SHA256:\\s*\"(?<currentDigest>[a-f0-9]{64})\"(?<between>[\\s\\S]*?)releases/download/lychee-v(?<currentValue>\\d+(?:\\.\\d+){2})/lychee-x86_64-unknown-linux-gnu\\.tar\\.gz"
+        "LYCHEE_SHA256:\\s*\"(?<currentDigest>[a-f0-9]{64})\"(?<between>[\\s\\S]*?)releases/download/(?<currentValue>lychee-v\\d+(?:\\.\\d+){2})/lychee-x86_64-unknown-linux-gnu\\.tar\\.gz"
       ],
       "depNameTemplate": "lychee",
       "packageNameTemplate": "lycheeverse/lychee",
       "datasourceTemplate": "github-release-attachments",
-      "versioningTemplate": "semver",
-      "extractVersionTemplate": "^lychee-v(?<version>.*)$",
-      "autoReplaceStringTemplate": "LYCHEE_SHA256: \"{{{newDigest}}}\"{{{between}}}releases/download/lychee-v{{{newValue}}}/lychee-x86_64-unknown-linux-gnu.tar.gz"
+      "versioningTemplate": "regex:^lychee-v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$",
+      "autoReplaceStringTemplate": "LYCHEE_SHA256: \"{{{newDigest}}}\"{{{between}}}releases/download/{{{newValue}}}/lychee-x86_64-unknown-linux-gnu.tar.gz"
     }
   ]
 }
