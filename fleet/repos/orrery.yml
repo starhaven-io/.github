@@ -10,6 +10,10 @@ params:
     - package-ecosystem: "opentofu"
       group: "opentofu"
       directories: ["/", "/modules/*"]
+  zizmor:
+    advanced-security: false
+    pull-request-paths: [".github/workflows/**"]
+    timeout-minutes: 5
   pinprick-audit:
     advanced-security: "false"
     fail-on-findings: true
@@ -17,4 +21,3 @@ params:
     push-paths: [".github/workflows/**"]
 exceptions:
   codeql: "OpenTofu-only private infra; tofu.yml owns IaC validation"
-  zizmor: "private repo without GHAS: no SARIF upload; zizmor.yml is a hand-rolled direct gate"

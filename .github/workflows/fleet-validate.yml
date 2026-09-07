@@ -31,18 +31,6 @@ jobs:
           working-directory: fleet
           bundler-cache: true
 
-      - name: Install actionlint
-        env:
-          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-        run: |
-          archive="${RUNNER_TEMP}/actionlint.tar.gz"
-          curl --fail --location --silent --show-error \
-            --output "${archive}" \
-            "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz"
-          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum --check --strict
-          tar -xzf "${archive}" -C "${RUNNER_TEMP}" actionlint
-          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
-
       - name: Set up Node for Renovate validation
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -69,7 +57,15 @@ jobs:
               YAML.safe_load(File.read(workflow, encoding: "UTF-8"), permitted_classes: [], aliases: false)
             end
           '
-          actionlint -ignore 'reusable workflow call "\$/\.github/workflows/(reusable-conventional-commits|fleet-validate|reusable-zizmor)\.yml"'
+
+      - name: Audit hub workflows
+        env:
+          ZIZMOR_IMAGE: "ghcr.io/zizmorcore/zizmor:1.30.0@sha256:1ba0035c343f50e85fde29beb0d78e4db448eaa0c762a11a09805d241424ee03"
+        run: |
+          docker run --rm --network none \
+            --volume "${GITHUB_WORKSPACE}:/workspace:ro" \
+            --workdir /workspace "${ZIZMOR_IMAGE}" \
+            --offline --strict-collection --persona auditor -- .github/workflows/
 
       - name: Validate Renovate preset
         working-directory: ${{ runner.temp }}
@@ -132,18 +128,6 @@ jobs:
         with:
           working-directory: hub/fleet
 
-      - name: Install actionlint
-        env:
-          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-        run: |
-          archive="${RUNNER_TEMP}/actionlint.tar.gz"
-          curl --fail --location --silent --show-error \
-            --output "${archive}" \
-            "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz"
-          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum --check --strict
-          tar -xzf "${archive}" -C "${RUNNER_TEMP}" actionlint
-          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
-
       - name: Checkout consumer
         id: clone
         continue-on-error: true
@@ -199,11 +183,12 @@ jobs:
           git add -A
           git diff --cached --check
 
-      - name: Lint rendered workflows
+      - name: Audit rendered workflows
         if: steps.clone.outcome == 'success'
         working-directory: repo
         env:
           REPO_NAME: ${{ matrix.repo }}
+          ZIZMOR_IMAGE: "ghcr.io/zizmorcore/zizmor:1.30.0@sha256:1ba0035c343f50e85fde29beb0d78e4db448eaa0c762a11a09805d241424ee03"
         run: |
           workflow_manifest="${RUNNER_TEMP}/fleet-managed-workflows"
           ruby ../hub/fleet/sync.rb \
@@ -213,12 +198,13 @@ jobs:
             --list-managed-workflows > "${workflow_manifest}"
           mapfile -t workflow_paths < "${workflow_manifest}"
           if (( ${#workflow_paths[@]} == 0 )); then
-            echo "No fleet-managed workflows to lint."
-            exit 0
+            echo "::error::No fleet-managed workflows to audit."
+            exit 1
           fi
-          actionlint \
-            -ignore 'reusable workflow call "\$/\.github/workflows/(reusable-conventional-commits|fleet-validate|reusable-zizmor)\.yml"' \
-            "${workflow_paths[@]}"
+          docker run --rm --network none \
+            --volume "${GITHUB_WORKSPACE}/repo:/workspace:ro" \
+            --workdir /workspace "${ZIZMOR_IMAGE}" \
+            --offline --strict-collection --persona auditor -- "${workflow_paths[@]}"
 
       - name: Validate rendered Renovate stub
         if: steps.clone.outcome == 'success' && matrix.renovate

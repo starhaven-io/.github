@@ -25,6 +25,15 @@ class ReleaseWorkflowTest < Minitest::Test
     )
   end
 
+  def test_release_requests_queue_while_periodic_syncs_may_coalesce
+    assert_equal(
+      { "group" => "fleet-release", "cancel-in-progress" => false, "queue" => "max" },
+      @release.fetch("concurrency")
+    )
+    assert_equal false, @sync.fetch("concurrency").fetch("cancel-in-progress")
+    refute @sync.fetch("concurrency").key?("queue")
+  end
+
   def test_release_pr_is_bound_to_app_owned_head_and_returned_commit
     script = step(@release, "release-pr", "Create verified release commit and open PR").fetch("run")
 
@@ -225,13 +234,86 @@ class ReleaseWorkflowTest < Minitest::Test
     assert_includes public_failure.fetch("run"), "exit 1"
   end
 
-  def test_consumer_actionlint_is_scoped_to_fleet_managed_workflows
-    script = step(@validate, "dry-run", "Lint rendered workflows").fetch("run")
+  def test_consumer_workflow_audit_is_scoped_to_fleet_managed_workflows
+    script = step(@validate, "dry-run", "Audit rendered workflows").fetch("run")
 
     assert_includes script, "--list-managed-workflows"
     assert_includes script, '> "${workflow_manifest}"'
     assert_includes script, '"${workflow_paths[@]}"'
+    assert_includes script, "--offline --strict-collection --persona auditor --"
+    assert_includes script, "--network none"
+    assert_includes script, '"${GITHUB_WORKSPACE}/repo:/workspace:ro"'
     refute_includes script, "< <("
+  end
+
+  def test_strict_audit_images_have_one_automated_update_contract
+    reusable = YAML.safe_load_file(
+      File.join(ROOT, ".github/workflows/reusable-zizmor.yml"), permitted_classes: [], aliases: false
+    )
+    steps = [
+      step(@validate, "prepare", "Audit hub workflows"),
+      step(@validate, "dry-run", "Audit rendered workflows"),
+      step(reusable, "zizmor", "Analyze workflows")
+    ]
+    images = steps.map { |candidate| candidate.fetch("env").fetch("ZIZMOR_IMAGE") }
+    assert_equal 1, images.uniq.length
+    steps.each { |candidate| assert_includes candidate.fetch("run"), "--strict-collection" }
+
+    preset = JSON.parse(File.read(File.join(ROOT, "renovate-config.json")))
+    manager = preset.fetch("customManagers").find { |candidate| candidate["datasourceTemplate"] == "docker" }
+    refute_nil manager
+    pattern = Regexp.new(manager.fetch("matchStrings").fetch(0))
+    file_pattern = Regexp.new(manager.fetch("managerFilePatterns").fetch(0)[1...-1])
+    matches = %w[.github/workflows/fleet-validate.yml .github/workflows/reusable-zizmor.yml].flat_map do |path|
+      assert_match file_pattern, path
+      File.read(File.join(ROOT, path)).scan(pattern)
+    end
+    assert_equal 3, matches.length
+    matches.each do |name, version, digest|
+      assert_equal "ghcr.io/zizmorcore/zizmor", name
+      assert_match(/\A\d+\.\d+\.\d+\z/, version)
+      assert_match(/\Asha256:\h{64}\z/, digest)
+    end
+
+    upload = step(reusable, "zizmor", "Upload SARIF")
+    assert_equal "inputs.advanced-security", upload.fetch("if")
+    assert_equal "${{ steps.analyze.outputs.sarif-file }}", upload.fetch("with").fetch("sarif_file")
+  end
+
+  def test_reusable_audit_preserves_private_failures_and_public_sarif
+    reusable = YAML.safe_load_file(
+      File.join(ROOT, ".github/workflows/reusable-zizmor.yml"), permitted_classes: [], aliases: false
+    )
+    script = step(reusable, "zizmor", "Analyze workflows").fetch("run")
+    Dir.mktmpdir("fleet-zizmor-contract") do |directory|
+      stub = File.join(directory, "docker")
+      File.write(stub, <<~'SH')
+        #!/bin/sh
+        printf '%s\n' "$@" > "$ARGUMENT_LOG"
+        printf 'audit report\n'
+        exit "$AUDIT_STATUS"
+      SH
+      File.chmod(0o755, stub)
+      %w[true false].product([0, 1, 3, 14]).each do |advanced, status|
+        output = File.join(directory, "output")
+        arguments = File.join(directory, "arguments")
+        File.write(output, "")
+        environment = {
+          "PATH" => "#{directory}#{File::PATH_SEPARATOR}#{ENV.fetch("PATH")}",
+          "GITHUB_WORKSPACE" => directory, "RUNNER_TEMP" => directory, "GITHUB_OUTPUT" => output,
+          "ZIZMOR_IMAGE" => "fixture-image", "ADVANCED_SECURITY" => advanced,
+          "ARGUMENT_LOG" => arguments, "AUDIT_STATUS" => status.to_s
+        }
+        _stdout, stderr, result = run_bash(script, cwd: directory, env: environment)
+        assert_equal status, result.exitstatus, stderr
+        actual = File.readlines(arguments, chomp: true)
+        assert_includes actual, "#{directory}:/workspace:ro"
+        assert_includes actual, "--strict-collection"
+        assert_equal ["--", "."], actual.last(2)
+        assert_equal advanced == "true", actual.include?("sarif")
+        assert_equal advanced == "true" && status.zero?, File.read(output).include?("sarif-file=")
+      end
+    end
   end
 
   def test_validator_installs_never_run_dependency_lifecycle_scripts

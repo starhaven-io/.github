@@ -2,6 +2,7 @@ name: PR Conclusion
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 permissions: {}
 
@@ -10,7 +11,7 @@ defaults:
     shell: bash -euo pipefail {0}
 
 concurrency:
-  group: "conclusion-${{ github.ref }}"
+  group: "${{ github.event.action == 'edited' && format('conclusion-edit-{0}-{1}', github.ref, github.run_id) || format('conclusion-{0}', github.ref) }}"
   cancel-in-progress: true
 
 jobs:

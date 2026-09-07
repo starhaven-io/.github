@@ -952,7 +952,8 @@ class GuardRegressionsTest < Minitest::Test
   def test_rejects_overlapping_managed_just_recipe_names
     repo = scenario("just-recipe-managed-overlap")
     File.write(File.join(repo, "fleet/blocks/audit.just"),
-               "audit:\n    zizmor --persona auditor .github/workflows/\n\npinprick-audit:\n    true\n")
+               "audit:\n    zizmor --strict-collection --persona auditor .github/workflows/\n\n" \
+               "pinprick-audit:\n    true\n")
 
     assert_rejects(
       ["sync", sync(repo),
@@ -1062,6 +1063,36 @@ class GuardRegressionsTest < Minitest::Test
     )
   end
 
+  def test_renders_guards_and_retires_codecov_uploader
+    repo = scenario("codecov-uploader")
+    config = fleet_config(repo)
+    config.fetch("params")["codecov"] = true
+    write_fleet_config(repo, config)
+    assert_sync_success(sync(repo))
+    path = File.join(repo, "scripts/upload-codecov.py")
+    assert_equal File.read(File.join(repo, "fleet/files/upload-codecov.py")), File.read(path)
+    assert_sync_success(sync(repo, "--check"))
+    commit_all(repo, "adopt codecov uploader")
+
+    File.write(path, "# changed uploader\n")
+    commit_all(repo, "edit codecov uploader")
+    assert_rejects(["guard", guard(repo), "fleet guard: managed surface change rejected"])
+
+    config.fetch("params").delete("codecov")
+    write_fleet_config(repo, config)
+    assert_sync_success(sync(repo))
+    refute_path_exists path
+    assert_sync_success(sync(repo, "--check"))
+  end
+
+  def test_rejects_invalid_codecov_parameter
+    repo = scenario("codecov-invalid")
+    config = fleet_config(repo)
+    config.fetch("params")["codecov"] = "true"
+    write_fleet_config(repo, config)
+    assert_rejects(["sync", sync(repo), ".fleet.yml params.codecov must be true or false"])
+  end
+
   def test_renders_npm_policy_surfaces
     repo = scenario("npm-policy-render")
     enable_npm_policy(repo, [".", "site"])
@@ -1112,7 +1143,7 @@ class GuardRegressionsTest < Minitest::Test
 
     assert_sync_success(sync(repo, "--adopt"))
     assert_sync_success(sync(repo, "--check"))
-    assert_includes File.read(justfile), "zizmor --persona auditor .github/workflows/"
+    assert_includes File.read(justfile), "zizmor --strict-collection --persona auditor .github/workflows/"
     assert_includes File.read(agents), "## Commit and PR conventions"
   end
 
@@ -1194,6 +1225,7 @@ class GuardRegressionsTest < Minitest::Test
 
   def test_rejects_invalid_ownership_fields_in_prior_config
     cases = {
+      "codecov" => ->(config) { config.fetch("params")["codecov"] = "true" },
       "dependabot" => ->(config) { config.fetch("params")["dependabot"] = {} },
       "link-check" => ->(config) { config.fetch("params")["link-check"] = {} },
       "npm-policy" => ->(config) { config.fetch("params")["npm-policy"] = {} },
@@ -1475,7 +1507,7 @@ class ConclusionContractTest < Minitest::Test
   end
 
   def test_every_pull_request_reports_exact_lowercase_conclusion
-    assert_equal({ "pull_request" => nil }, @workflow.fetch(true))
+    assert_equal({ "pull_request" => { "types" => %w[opened synchronize reopened edited] } }, @workflow.fetch(true))
     refute @jobs.fetch("changes").key?("if")
 
     guard = @jobs.fetch("guard")
@@ -1490,6 +1522,22 @@ class ConclusionContractTest < Minitest::Test
     assert_equal "conclusion", conclusion.fetch("name")
     assert_equal "${{ always() }}", conclusion.fetch("if")
     assert_equal %w[changes guard commits fleet audit zizmor], conclusion.fetch("needs")
+  end
+
+  def test_title_edits_keep_source_gates_and_do_not_cancel_source_runs
+    assert_equal(
+      "${{ github.event.action == 'edited' && format('conclusion-edit-{0}-{1}', github.ref, github.run_id) " \
+      "|| format('conclusion-{0}', github.ref) }}",
+      @workflow.fetch("concurrency").fetch("group")
+    )
+    assert_equal(
+      { "audit" => "true", "fleet" => "true" },
+      classify(".github/workflows/dco-required.yml", event_action: "edited")
+    )
+    assert_conclusion_failure("GITHUB_EVENT_ACTION" => "edited", "COMMITS_RESULT" => "failure")
+    assert_conclusion_failure(
+      "GITHUB_EVENT_ACTION" => "edited", "FLEET_REQUIRED" => "true", "FLEET_RESULT" => "failure"
+    )
   end
 
   def test_docs_only_change_intentionally_skips_conditional_work
@@ -1657,7 +1705,7 @@ class ConclusionContractTest < Minitest::Test
 
   private
 
-  def classify(path)
+  def classify(path, event_action: "synchronize")
     repo = Dir.mktmpdir("conclusion-classify-", TMPDIR)
     git(repo, "init", "-q")
     File.write(File.join(repo, "baseline"), "baseline\n")
@@ -1670,14 +1718,16 @@ class ConclusionContractTest < Minitest::Test
     commit_all(repo, "change #{path}")
     head_sha = git(repo, "rev-parse", "HEAD").stdout.strip
 
-    classify_revisions(repo, base_sha, head_sha)
+    classify_revisions(repo, base_sha, head_sha, event_action: event_action)
   end
 
-  def classify_revisions(repo, base_sha, head_sha)
+  def classify_revisions(repo, base_sha, head_sha, event_action: "synchronize")
     output_path = File.join(repo, "github-output")
     result = run_command_env(
       {
         "BASE_SHA" => base_sha,
+        "GITHUB_EVENT_ACTION" => event_action,
+        "GITHUB_EVENT_NAME" => "pull_request",
         "GITHUB_OUTPUT" => output_path,
         "HEAD_SHA" => head_sha,
         "RUNNER_TEMP" => repo

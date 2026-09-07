@@ -17,6 +17,7 @@ defaults:
 concurrency:
   group: fleet-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   release-pr:
