@@ -21,7 +21,7 @@ params:
   npm-policy:
     projects: ["site"]
   link-check:
-    targets: "--exclude '^http://localhost:4321/?$' README.md DATA_SOURCES.md seed/README.md"
+    targets: "README.md AGENTS.md CLAUDE.md DATA_SOURCES.md SECURITY.md CONTRIBUTING.md CODE_OF_CONDUCT.md seed/README.md docs/**/*.md"
     build-site: false
     authenticated-github: true
     schedule: "0 14 * * 1"

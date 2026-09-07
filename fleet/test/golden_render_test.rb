@@ -14,9 +14,7 @@ require_relative "../version"
 # repositories.
 module GoldenHelpers
   ROOT = File.expand_path("../..", __dir__)
-  # Only reached for a config entry that omits `group`. Every consumer sets one
-  # today, so this mirror currently asserts nothing; it is here so the first
-  # config that relies on the renderer's fallback is covered on arrival.
+  # Configs without an explicit group use the renderer's ecosystem defaults.
   DEPENDABOT_GROUPS = {
     "bundler" => "bundler-dependencies",
     "github-actions" => "github-actions",

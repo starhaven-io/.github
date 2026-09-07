@@ -1746,9 +1746,9 @@ class FleetSync
   def marker_regex(block_name, style)
     case style
     when :markdown
-      /^<!-- fleet:block #{Regexp.escape(block_name)} -->\n.*?^<!-- fleet:end -->/m
+      /^<!-- fleet:block #{Regexp.escape(block_name)} -->\n(?:(?!^<!-- fleet:).)*?^<!-- fleet:end -->$/m
     when :hash
-      /^# fleet:block #{Regexp.escape(block_name)}\n.*?^# fleet:end/m
+      /^# fleet:block #{Regexp.escape(block_name)}\n(?:(?!^# fleet:).)*?^# fleet:end$/m
     else
       raise FleetError, "unknown marker style #{style}"
     end

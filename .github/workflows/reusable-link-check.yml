@@ -48,13 +48,13 @@ jobs:
 
       - name: Install dependencies
         if: inputs.build-site && inputs.site-directory == ''
-        # Fail closed on unreviewed install scripts (npm v12 default; see allowScripts in package.json).
+        # package.json declares the exact install-script approvals.
         run: npm ci --strict-allow-scripts
 
       - name: Install dependencies
         if: inputs.build-site && inputs.site-directory != ''
         working-directory: ${{ inputs.site-directory }}
-        # Fail closed on unreviewed install scripts (npm v12 default; see allowScripts in package.json).
+        # package.json declares the exact install-script approvals.
         run: npm ci --strict-allow-scripts
 
       - name: Build site

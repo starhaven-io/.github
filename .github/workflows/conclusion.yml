@@ -48,6 +48,7 @@ jobs:
               fleet/* | \
               renovate-config.json | \
               .github/workflows/conclusion.yml | \
+              .github/workflows/dco-required.yml | \
               .github/workflows/fleet-release.yml | \
               .github/workflows/fleet-sync.yml | \
               .github/workflows/fleet-validate.yml | \
