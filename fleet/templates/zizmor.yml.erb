@@ -1,6 +1,13 @@
 name: zizmor
 
 on:
+<% unless pull_request_paths.empty? -%>
+  pull_request:
+    paths:
+<% pull_request_paths.each do |path| -%>
+      - <%= scalar(path) %>
+<% end -%>
+<% end -%>
   push:
     branches:
       - main
@@ -26,9 +33,18 @@ jobs:
     name: Analyze
     permissions:
       contents: read
+<% if advanced_security -%>
       security-events: write # required to upload SARIF results
+<% else -%>
+      actions: read # online audits need workflow metadata in private repositories
+<% end -%>
     uses: starhaven-io/.github/.github/workflows/reusable-zizmor.yml@<%= reusable_ref %> # <%= reusable_version %>
-<% if timeout_minutes != 15 -%>
+<% if timeout_minutes != 15 || !advanced_security -%>
     with:
+<% unless advanced_security -%>
+      advanced-security: false
+<% end -%>
+<% if timeout_minutes != 15 -%>
       timeout-minutes: <%= timeout_minutes %>
+<% end -%>
 <% end -%>

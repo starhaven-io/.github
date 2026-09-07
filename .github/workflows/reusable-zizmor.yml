@@ -24,9 +24,37 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99 # v0.6.3
+      - name: Analyze workflows
+        id: analyze
+        env:
+          ZIZMOR_IMAGE: "ghcr.io/zizmorcore/zizmor:1.30.0@sha256:1ba0035c343f50e85fde29beb0d78e4db448eaa0c762a11a09805d241424ee03"
+          GH_TOKEN: ${{ github.token }}
+          ADVANCED_SECURITY: ${{ inputs.advanced-security }}
+        shell: bash -euo pipefail {0}
+        run: |
+          arguments=(--strict-collection --persona auditor)
+          if [[ "${ADVANCED_SECURITY}" == "true" ]]; then
+            arguments+=(--format sarif)
+          fi
+          report="${RUNNER_TEMP}/zizmor-results"
+          if docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace:ro" \
+            --workdir /workspace --env GH_TOKEN \
+            "${ZIZMOR_IMAGE}" "${arguments[@]}" -- . > "${report}"; then
+            if [[ "${ADVANCED_SECURITY}" == "true" ]]; then
+              echo "sarif-file=${report}" >> "${GITHUB_OUTPUT}"
+            else
+              cat "${report}"
+            fi
+          else
+            status=$?
+            cat "${report}"
+            exit "${status}"
+          fi
+
+      - name: Upload SARIF
+        if: inputs.advanced-security
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
-          persona: auditor
-          # Fork pull requests cannot upload SARIF with the read-only token;
-          # with advanced-security disabled zizmor gates directly instead.
-          advanced-security: ${{ inputs.advanced-security }}
+          sarif_file: ${{ steps.analyze.outputs.sarif-file }}
+          category: zizmor

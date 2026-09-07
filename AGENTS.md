@@ -29,7 +29,7 @@ Markdown-only profile repository.
 ## Required checks
 
 - Run `just check` before finishing. It runs git diff hygiene, the fleet test
-  suites under the locked bundle, RuboCop on `fleet/`, actionlint, a zizmor
+  suites under the locked bundle, RuboCop on `fleet/`, a strict-collection zizmor
   workflow audit, a pinprick action supply-chain audit, and a lychee link
   check. Missing local tools count as failures with install hints.
 - Run `BUNDLE_GEMFILE=fleet/Gemfile bundle install` once per clone so the test
@@ -87,7 +87,7 @@ Top level:
 - `conclusion.yml`: the required PR check. It classifies changed paths, fans
   out to the fleet guard, conventional commits, `fleet-validate.yml`, and the
   workflow audits, and requires every relevant result.
-- `fleet-validate.yml`: renderer syntax, tests, lint, and actionlint, plus a
+- `fleet-validate.yml`: renderer syntax, tests, lint, and strict workflow collection, plus a
   per-consumer dry-run render with an idempotence check.
 - `fleet-guard.yml`: this repo's own rendered guard caller.
 - `dco-required.yml`: run from `@main` by the org DCO ruleset against every
@@ -113,10 +113,10 @@ thin callers: `reusable-codeql.yml`, `reusable-conventional-commits.yml`,
 
 `renovate-config.json` is the estate's shared Renovate policy for tool pins that
 no Dependabot ecosystem owns: the `rust-toolchain` channel and `custom.regex`
-matches for `cargo install` pins, the Vale release/SHA-256 pair, and
-`TOFU_VERSION`. Dependabot keeps every ecosystem declared by each consumer's
-fleet-rendered `.github/dependabot.yml`. Do not add a manager here that
-duplicates one of those ecosystems.
+matches for `cargo install` pins, the Vale release/SHA-256 pair, `TOFU_VERSION`,
+and the version/digest pair in `ZIZMOR_IMAGE`. Dependabot keeps every ecosystem
+declared by each consumer's fleet-rendered `.github/dependabot.yml`. Do not add a
+manager here that duplicates one of those ecosystems.
 
 Consumers opt in explicitly with
 `local>starhaven-io/.github:renovate-config#<fleet-release>`. Renovate resolves

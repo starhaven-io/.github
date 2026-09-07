@@ -84,6 +84,18 @@
       "datasourceTemplate": "github-release-attachments",
       "versioningTemplate": "regex:^lychee-v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$",
       "autoReplaceStringTemplate": "LYCHEE_SHA256: \"{{{newDigest}}}\"{{{between}}}releases/download/{{{newValue}}}/lychee-x86_64-unknown-linux-gnu.tar.gz"
+    },
+    {
+      "customType": "regex",
+      "description": "Update the strict workflow audit container version and digest together.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "ZIZMOR_IMAGE:\\s*\"(?<depName>ghcr\\.io/zizmorcore/zizmor):(?<currentValue>\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})\""
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
     }
   ]
 }

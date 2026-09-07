@@ -36,6 +36,7 @@ Tier 1:
 | `LICENSE` | one canonical file per license type in `fleet/files/licenses/` |
 | `.mcp.json` | astro-docs config; consumers with `astro-docs: true` |
 | `scripts/check-npm-install-policy.mjs` | deny-by-default install-script checker; consumers with `npm-policy` |
+| `scripts/upload-codecov.py` | fixed-version, SHA-256-verified OIDC uploader; consumers with `codecov: true` |
 
 Tier 2 (managed blocks):
 
@@ -56,7 +57,7 @@ Tier 3 (rendered files and thin callers):
 | `.fleet.yml` | rendered copy of `fleet/repos/<name>.yml` | complete effective fleet config, kept consumer-side for discoverability and guard base-state classification |
 | `.github/dependabot.yml` | rendered file | ecosystems, directories, and dependency policies |
 | `renovate.json` | rendered file | explicit shared-preset reference pinned to the current immutable fleet release; consumers with `renovate: true` |
-| `.github/workflows/zizmor.yml` | caller of `reusable-zizmor.yml` | extra push paths, schedule, timeout; defaults render the canonical shape |
+| `.github/workflows/zizmor.yml` | caller of `reusable-zizmor.yml` | extra push paths, optional PR paths, SARIF or direct gate, schedule, timeout |
 | `.github/workflows/pinprick-audit.yml` | caller of `reusable-pinprick-audit.yml` | `advanced-security` (false also drops the `security-events` grant), `fail-on-findings`, timeout |
 | `.github/workflows/link-check.yml` | caller of `reusable-link-check.yml` | targets, `build-site`, site directory, schedule |
 | `.github/workflows/codeql.yml` | caller of `reusable-codeql.yml` | languages, paths, runner, build mode and profile |
@@ -178,6 +179,76 @@ directory before either `npm ci --strict-allow-scripts` path. Configuration
 validation requires every built site directory to be enrolled in
 `npm-policy.projects`.
 
+The `codecov: true` param syncs `scripts/upload-codecov.py`. Repository-owned CI
+produces coverage and any JUnit reports without upload credentials, saves them
+as artifacts, and downloads those exact same-run artifacts in a separate Ubuntu
+upload job. Only that job receives `id-token: write`; it checks out the uploader
+alone from the pull request's trusted base SHA or the push SHA, with credentials
+disabled. Invoke it from the workspace root:
+
+```bash
+python3 -I scripts/upload-codecov.py --coverage reports/lcov.info --junit reports/junit.xml
+```
+
+Before saving artifacts, producers invoke the same arguments with `--prepare`:
+
+```bash
+python3 -I scripts/upload-codecov.py --prepare --coverage coverage.lcov --junit junit.xml
+```
+
+This mode needs no network or upload credentials. It converts LCOV `SF:` paths
+and Cobertura filenames to paths relative to `GITHUB_WORKSPACE`, normalizes
+Cobertura source roots, and rejects source paths outside that workspace. It
+validates all reports before writing any of them and preserves JUnit bytes.
+This keeps reports usable after moving from a macOS test runner to the Linux
+upload job without giving that job the source checkout or CLI path-fixing tools.
+
+Both report arguments are repeatable; at least one coverage or JUnit report is
+required. A producer that generates JUnit on test failure can upload that report
+alone, preserving failure diagnostics even when coverage was not generated.
+Caller workflows must still require coverage after successful coverage tests
+and must not hide missing reports behind blanket error tolerance. Reports must be
+nonempty regular files under the workspace, with no symlinks. The helper uses
+the pull request head SHA and PR number, or the push SHA, from GitHub's event
+payload. The upload job handles pushes and same-repository pull requests,
+including Dependabot. Fork pull requests retain their test gates and explicitly
+skip authenticated uploads; the helper rejects fork and `pull_request_target`
+invocations. Missing OIDC permissions, missing reports, integrity failures, and
+upload errors fail the job. There is no static-token or unauthenticated fallback.
+
+The uploader downloads the version and SHA-256 pair reviewed in fleet canon,
+requests an OIDC token with audience `https://codecov.io`, and passes only the
+short-lived upload token to the CLI. It runs in an isolated temporary directory
+with an empty configuration, report discovery and file fixes disabled, and
+`--plugin noop` to avoid the CLI's default coverage preparation commands. The
+upload job must not build, install dependencies, restore executable caches, or
+execute other repository code. Coverage generation and repository-specific
+report paths remain repository-owned.
+
+Update the CLI version and its independently recorded SHA-256 together in
+`fleet/files/upload-codecov.py`, after reviewing the upstream release and its
+[published integrity metadata](https://docs.codecov.com/docs/codecov-uploader).
+The pair crosses the normal fleet release and sync boundary; CI never downloads
+`latest` or trusts a runtime checksum download as its expected digest. On first
+adoption, deliver the helper through fleet release and sync before merging the
+repository-owned upload-job change, so a pull request's base already contains
+the trusted helper. Do not introduce an unpublished reusable-workflow pin or
+hand-copy the generated script to shorten this sequence.
+
+After the helper exists in a consumer's base branch, Fleet Guard checks changes
+to that consumer's `ci.yml` against `fleet/codecov_policy.rb` when `codecov` is
+enabled in canon. The contract preserves the uploader's exact permissions,
+trusted sparse checkout, named same-run artifact downloads, isolated helper
+invocation, and `conclusion` dependency. It rejects OIDC grants in producer jobs,
+static Codecov tokens, wrapper actions, upload error tolerance, executable
+environment overrides, and extra uploader commands. The accepted command forms
+are a direct invocation with literal report paths or the explicit failed-test
+JUnit selection template. A new execution shape requires a reviewed canon
+change; this is not a general shell analyzer. Producer path selection, report
+completeness, aggregate result handling, and hosted OIDC acceptance still need
+their repository-specific checks. Unrelated source changes and helper-first
+adoption remain unblocked.
+
 Exceptions are explicit and cited; a managed surface with an exception entry is
 left untouched by the renderer, so every variant is self-documenting:
 
@@ -284,11 +355,21 @@ writer for their root `renovate.json`, including the load-bearing Merge
 Confidence opt-out, and pins the shared preset by immutable fleet release tag.
 The fleet validation workflow uses the exact Renovate version declared in
 `fleet/validator/package.json` for strict, no-global validation of the preset
-and each rendered adopter stub. It actionlints every hub workflow and each
-consumer workflow whose complete contents the fleet renders; unrelated
-repo-owned workflows remain the consumer's own CI responsibility. Ephemeral
-release-PR validation can propose a new version, while publication requires the
-real authenticated tag.
+and each rendered adopter stub. Zizmor audits every hub workflow and each
+consumer workflow whose complete contents the fleet renders with
+`--strict-collection`, so syntax and schema failures fail validation; unrelated
+repo-owned workflows remain the consumer's own CI responsibility. The shared
+Zizmor workflow and local audit recipes use the same strict collection option.
+This does not provide every expression-type or shell diagnostic from a general
+workflow linter; repository policy tests and existing ShellCheck gates remain
+separate checks. The shared workflow runs one digest-pinned Zizmor container,
+mounts the checkout read-only, and uploads SARIF only when `advanced-security`
+is enabled. `params.zizmor.advanced-security: false` renders a direct gate with
+read-only permissions for repositories without code scanning; optional
+`pull-request-paths` retains their PR audit route. The shared Renovate Docker
+manager updates the `ZIZMOR_IMAGE` version and digest together in every hub
+workflow that uses it. Ephemeral release-PR validation can propose a new version,
+while publication requires the real authenticated tag.
 
 Consumer Dependabot and the shared Renovate preset set a seven-day age gate
 for eligible third-party updates. The Dependabot template exempts same-organization

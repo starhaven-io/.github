@@ -24,8 +24,6 @@ module GoldenHelpers
     "terraform" => "terraform"
   }.freeze
   FLEET_PIN_IGNORE = "starhaven-io/.github/*"
-  ACTIONLINT_IGNORE = 'reusable workflow call "\$/\.github/workflows/' \
-                      '(reusable-conventional-commits|fleet-validate|reusable-zizmor)\.yml"'
   REUSABLE_USES_PATTERN = %r{
     uses:\s*"?
     (starhaven-io/\.github/\.github/workflows/reusable-[A-Za-z0-9_.-]+\.ya?ml)
@@ -191,7 +189,7 @@ class GoldenRenderTest < Minitest::Test
     assert_includes %w[public private], config.fetch("visibility")
     assert_rendered_inventory(repo_root, name, config)
     assert_workflow_shapes(repo_root, name, config)
-    assert_actionlint(repo_root, name)
+    assert_workflow_collection(repo_root, name)
   end
 
   private
@@ -250,6 +248,12 @@ class GoldenRenderTest < Minitest::Test
     end
 
     assert_npm_policy(repo_root, config) if params(config)["npm-policy"]
+    codecov = File.join(repo_root, "scripts/upload-codecov.py")
+    if params(config)["codecov"]
+      assert_equal File.read(File.join(ROOT, "fleet/files/upload-codecov.py")), File.read(codecov)
+    else
+      refute_path_exists codecov
+    end
   end
 
   def assert_renovate(repo_root, name)
@@ -375,17 +379,17 @@ class GoldenRenderTest < Minitest::Test
     assert_pinprick(repo_root, name, config)
   end
 
-  def assert_actionlint(repo_root, name)
+  def assert_workflow_collection(repo_root, name)
     available = ENV.fetch("PATH").split(File::PATH_SEPARATOR).any? do |directory|
-      File.executable?(File.join(directory, "actionlint"))
+      File.executable?(File.join(directory, "zizmor"))
     end
     return unless available
 
     workflows = Dir.glob(File.join(repo_root, ".github/workflows/*.{yml,yaml}"))
     output, status = Open3.capture2e(
-      "actionlint", "-ignore", ACTIONLINT_IGNORE, *workflows
+      "zizmor", "--offline", "--strict-collection", "--persona", "auditor", *workflows
     )
-    assert status.success?, "actionlint failed for #{name}:\n#{output}"
+    assert status.success?, "workflow collection/audit failed for #{name}:\n#{output}"
   end
 
   def assert_link_check(repo_root, name, config)
@@ -432,6 +436,20 @@ class GoldenRenderTest < Minitest::Test
     assert_includes push_paths, ".github/workflows/**", "zizmor must watch workflows for #{name}"
     (params(config).dig("zizmor", "push-paths") || []).each do |path|
       assert_includes push_paths, path, "zizmor must watch configured path #{path} for #{name}"
+    end
+
+    pull_request_paths = params(config).dig("zizmor", "pull-request-paths") || []
+    if pull_request_paths.empty?
+      refute workflow.fetch(true).key?("pull_request")
+    else
+      assert_equal pull_request_paths, workflow.fetch(true).fetch("pull_request").fetch("paths")
+    end
+    job = workflow.fetch("jobs").fetch("zizmor")
+    if params(config).dig("zizmor", "advanced-security") == false
+      assert_equal false, job.fetch("with").fetch("advanced-security")
+      assert_equal({ "contents" => "read", "actions" => "read" }, job.fetch("permissions"))
+    else
+      assert_equal "write", job.fetch("permissions").fetch("security-events")
     end
   end
 

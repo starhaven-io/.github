@@ -8,6 +8,7 @@ require "optparse"
 require "open3"
 require "yaml"
 require_relative "version"
+require_relative "codecov_policy"
 
 class FleetError < StandardError; end
 
@@ -75,6 +76,7 @@ class FleetSync
 
   PARAM_KEYS = %w[
     astro-docs
+    codecov
     codeql
     dependabot
     link-check
@@ -245,6 +247,7 @@ class FleetSync
     raise FleetError, "existing .fleet.yml exceptions must be a mapping" unless exceptions.is_a?(Hash)
 
     validate_boolean(params, "astro-docs", "existing .fleet.yml params.astro-docs")
+    validate_boolean(params, "codecov", "existing .fleet.yml params.codecov")
     validate_boolean(params, "renovate", "existing .fleet.yml params.renovate")
     %w[pinprick-audit zizmor].each do |key|
       next unless params.key?(key)
@@ -366,6 +369,7 @@ class FleetSync
     reject_hidden_reusable_pins
     reject_symlinked_workflow_paths(config)
     reject_reusable_workflow_declassification
+    validate_codecov_ci_policy(config)
 
     managed_changes = changed_managed_surfaces(config)
     return if managed_changes.empty?
@@ -484,6 +488,7 @@ class FleetSync
   def validate_params(params)
     reject_unknown_keys(params, PARAM_KEYS, ".fleet.yml params")
     validate_boolean(params, "astro-docs", ".fleet.yml params.astro-docs")
+    validate_boolean(params, "codecov", ".fleet.yml params.codecov")
     validate_dependabot(params["dependabot"]) if params.key?("dependabot")
     validate_npm_policy(params["npm-policy"]) if params.key?("npm-policy")
     validate_link_check(params["link-check"]) if params.key?("link-check")
@@ -676,7 +681,9 @@ class FleetSync
     path = ".fleet.yml params.zizmor"
     raise FleetError, "#{path} must be a mapping" unless value.is_a?(Hash)
 
-    reject_unknown_keys(value, %w[push-paths schedule timeout-minutes], path)
+    reject_unknown_keys(value, %w[advanced-security pull-request-paths push-paths schedule timeout-minutes], path)
+    validate_boolean(value, "advanced-security", "#{path}.advanced-security")
+    validate_string_array(value, "pull-request-paths", "#{path}.pull-request-paths", nonempty: true)
     validate_string_array(value, "push-paths", "#{path}.push-paths", nonempty: true)
     validate_cron(value["schedule"], "#{path}.schedule") if value.key?("schedule")
     validate_integer(value, "timeout-minutes", "#{path}.timeout-minutes")
@@ -869,6 +876,14 @@ class FleetSync
     params = config_params(config)
     write_file(".mcp.json", read_path(hub_path("files/mcp.json")), ".mcp.json") if params["astro-docs"]
 
+    if params["codecov"]
+      write_file(
+        "scripts/upload-codecov.py",
+        read_path(hub_path("files/upload-codecov.py")),
+        "scripts/upload-codecov.py"
+      )
+    end
+
     if params["npm-policy"]
       write_file(
         "scripts/check-npm-install-policy.mjs",
@@ -996,6 +1011,8 @@ class FleetSync
         reusable_ref: ref,
         reusable_version: version,
         push_paths: zizmor_config.fetch("push-paths", []),
+        pull_request_paths: zizmor_config.fetch("pull-request-paths", []),
+        advanced_security: zizmor_config.fetch("advanced-security", true),
         schedule: zizmor_config["schedule"],
         timeout_minutes: timeout_minutes
       ),
@@ -1234,6 +1251,19 @@ class FleetSync
     raise FleetError, reusable_workflow_declassification_message(removed)
   end
 
+  def validate_codecov_ci_policy(config)
+    return unless config_params(config)["codecov"]
+    return unless guard_changed_paths.include?(".github/workflows/ci.yml")
+    return unless guard_base_file("scripts/upload-codecov.py")
+
+    path = repo_path(".github/workflows/ci.yml")
+    raise FleetError, "fleet guard: Codecov CI workflow must remain a regular file" unless regular_file?(path)
+
+    CodecovPolicy.validate!(read_path(path))
+  rescue CodecovPolicy::Error => e
+    raise FleetError, "fleet guard: Codecov CI contract rejected: #{e.message}"
+  end
+
   def reject_symlinked_workflow_ancestors(path)
     Pathname(path).descend do |ancestor|
       next if ancestor.to_s == path
@@ -1358,6 +1388,7 @@ class FleetSync
     files = [".fleet.yml", *TIER1_FILES.keys]
     files << "LICENSE" unless config_license(config) == "none"
     files << ".mcp.json" if params["astro-docs"]
+    files << "scripts/upload-codecov.py" if params["codecov"]
     files << "scripts/check-npm-install-policy.mjs" if params["npm-policy"]
     files << ".github/workflows/fleet-guard.yml"
     files << ".github/dependabot.yml" if params["dependabot"]
