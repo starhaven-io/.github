@@ -56,6 +56,24 @@ class ReleaseWorkflowTest < Minitest::Test
     assert_includes create, '.message == ("Fleet " + $version)'
   end
 
+  def test_release_tag_reads_retry_while_authentication_stays_fail_closed
+    create = step(@release, "tag", "Create release tag").fetch("run")
+    fetch = create[/^fetch_release_tag\(\) \{\n.*?^\}$/m]
+    verify = create[/^verify_release_tag\(\) \{\n.*?^\}$/m]
+
+    refute_nil fetch, "the tag reads must live in their own retrying helper"
+    refute_nil verify
+
+    assert_includes fetch, "for attempt in 1 2 3 4 5"
+    assert_includes fetch, "sleep 2"
+    assert_includes fetch, 'gh api "repos/${REPOSITORY}/git/tags/${TAG_SHA}"'
+    refute_includes fetch, ".object.sha == $commit"
+
+    assert_includes verify, "fetch_release_tag"
+    assert_includes verify, ".object.sha == $commit"
+    refute_includes verify, "for attempt"
+  end
+
   def test_sync_preflights_with_main_and_renders_with_the_authenticated_release
     triggers = @sync.fetch(true)
     assert_equal ["fleet-sync"], triggers.fetch("repository_dispatch").fetch("types")

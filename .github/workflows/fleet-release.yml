@@ -231,12 +231,26 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          verify_release_tag() {
+          # A tag object is not readable the instant its ref is created, so the reads
+          # retry. Only the reads retry; the authentication below stays fail-closed.
+          fetch_release_tag() {
             ref_file="${RUNNER_TEMP}/fleet-release-ref.json"
             tag_file="${RUNNER_TEMP}/fleet-release-tag.json"
-            gh api "repos/${REPOSITORY}/git/ref/tags/${VERSION}" > "${ref_file}"
-            TAG_SHA=$(jq -er 'select(.object.type == "tag") | .object.sha' "${ref_file}")
-            gh api "repos/${REPOSITORY}/git/tags/${TAG_SHA}" > "${tag_file}"
+            for attempt in 1 2 3 4 5; do
+              if gh api "repos/${REPOSITORY}/git/ref/tags/${VERSION}" > "${ref_file}" &&
+                TAG_SHA=$(jq -er 'select(.object.type == "tag") | .object.sha' "${ref_file}") &&
+                gh api "repos/${REPOSITORY}/git/tags/${TAG_SHA}" > "${tag_file}"; then
+                return 0
+              fi
+              if [ "${attempt}" -eq 5 ]; then
+                return 1
+              fi
+              sleep 2
+            done
+          }
+
+          verify_release_tag() {
+            fetch_release_tag
             jq -e \
               --arg version "${VERSION}" \
               --arg commit "${GITHUB_SHA}" \
