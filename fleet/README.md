@@ -57,6 +57,7 @@ Tier 3 (rendered files and thin callers):
 | `.fleet.yml` | rendered copy of `fleet/repos/<name>.yml` | complete effective fleet config, kept consumer-side for discoverability and guard base-state classification |
 | `.github/dependabot.yml` | rendered file | ecosystems, directories, and dependency policies |
 | `renovate.json` | rendered file | explicit shared-preset reference pinned to the current immutable fleet release; consumers with `renovate: true` |
+| `.pinprick.toml` | rendered audit policy | exact `pinprick-audit.accept-workflow-findings` decisions; the complete file is hub-owned |
 | `.github/workflows/zizmor.yml` | caller of `reusable-zizmor.yml` | extra push paths, optional PR paths, SARIF or direct gate, schedule, timeout |
 | `.github/workflows/pinprick-audit.yml` | caller of `reusable-pinprick-audit.yml` | `advanced-security` (false also drops the `security-events` grant), `fail-on-findings`, optional pull-request trigger, timeout |
 | `.github/workflows/link-check.yml` | caller of `reusable-link-check.yml` | targets, `build-site`, site directory, schedule |
@@ -95,6 +96,26 @@ The organization-required `.github/workflows/dco-required.yml` and
 pull requests. DCO validates commit sign-offs and bot provenance; Fleet Guard
 protects fleet-managed surfaces independently of the consumer's pull-request
 tree.
+
+### Accepted workflow findings
+
+`params.pinprick-audit.accept-workflow-findings` renders the entire
+`.pinprick.toml`. Each acceptance names one workflow path and SHA-256, category,
+severity, description, command, and review reason. It cannot accept third-party
+action findings or incomplete source coverage. Pinprick reports accepted
+findings explicitly, and any workflow byte change requires renewed review in
+canon. Keep the key with an empty array when retiring the last entry so the
+configuration remains managed while older releases can still load it.
+
+The released audit enables repository config only for macOSdb, whose two Apple
+archive downloads are reviewed in `fleet/repos/macOSdb.yml`. All other
+consumers retain `no-repo-config: true`; callers have no policy opt-in input.
+The required trusted-main guard rejects consumer edits, additions, deletions,
+and mode changes to the managed policy. As elsewhere in fleet delivery, the
+guard trusts Starhaven Bot and Dependabot writers. Introduce guard enforcement
+first, then release the engine and wrapper, then release/sync the policy and
+audit pin together. A successful local audit is not evidence that this hosted
+sequence has completed.
 
 ## Marker Convention
 

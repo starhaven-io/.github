@@ -33,3 +33,6 @@ jobs:
           # Fork pull requests cannot upload SARIF with the read-only token.
           advanced-security: ${{ inputs.advanced-security }}
           fail-on-findings: ${{ inputs.fail-on-findings }}
+          # macOSdb's complete config is fleet-owned and protected by the
+          # required trusted-main guard, including policy additions/removals.
+          no-repo-config: ${{ github.repository != 'starhaven-io/macOSdb' }}

@@ -388,6 +388,7 @@ class FleetSync
     base_managed = guard_base_config ? managed_surfaces(guard_base_config) : []
     declassified_surfaces = base_managed - head_managed
     reject_consumer_fleet_config_edit
+    reject_consumer_pinprick_config_edit(config)
     reject_invalid_workflow_paths
     validate_managed_path_ancestors(config)
     reject_hidden_reusable_pins
@@ -729,7 +730,12 @@ class FleetSync
     path = ".fleet.yml params.pinprick-audit"
     raise FleetError, "#{path} must be a mapping" unless value.is_a?(Hash)
 
-    reject_unknown_keys(value, %w[advanced-security fail-on-findings pull-request push-paths timeout-minutes], path)
+    reject_unknown_keys(value,
+                        %w[advanced-security fail-on-findings pull-request push-paths timeout-minutes
+                           accept-workflow-findings], path)
+    if value.key?("accept-workflow-findings")
+      validate_workflow_acceptances(value.fetch("accept-workflow-findings"), "#{path}.accept-workflow-findings")
+    end
     if value.key?("advanced-security")
       validate_advanced_security(value["advanced-security"], "#{path}.advanced-security")
     end
@@ -737,6 +743,28 @@ class FleetSync
     validate_boolean(value, "pull-request", "#{path}.pull-request")
     validate_string_array(value, "push-paths", "#{path}.push-paths", nonempty: true)
     validate_integer(value, "timeout-minutes", "#{path}.timeout-minutes")
+  end
+
+  def validate_workflow_acceptances(entries, path)
+    raise FleetError, "#{path} must be an array" unless entries.is_a?(Array)
+
+    fields = %w[workflow workflow-sha256 category severity description command reason]
+    entries.each_with_index do |entry, index|
+      item_path = "#{path}[#{index}]"
+      raise FleetError, "#{item_path} must be a mapping" unless entry.is_a?(Hash)
+
+      reject_unknown_keys(entry, fields, item_path)
+      fields.each { |field| validate_plain_string(entry[field], "#{item_path}.#{field}") }
+      unless entry.fetch("workflow").match?(WORKFLOW_FILE_PATTERN)
+        raise FleetError, "#{item_path}.workflow must be one literal workflow path"
+      end
+      unless entry.fetch("workflow-sha256").match?(/\A[0-9a-f]{64}\z/)
+        raise FleetError, "#{item_path}.workflow-sha256 must be a lowercase SHA-256"
+      end
+      unless %w[low medium high].include?(entry.fetch("severity"))
+        raise FleetError, "#{item_path}.severity must be low, medium, or high"
+      end
+    end
   end
 
   def validate_zizmor(value)
@@ -1038,6 +1066,10 @@ class FleetSync
     render_renovate if params["renovate"]
     render_zizmor(params.fetch("zizmor", {})) unless exception?(config, "zizmor")
     render_pinprick_audit(params.fetch("pinprick-audit", {})) unless exception?(config, "pinprick-audit")
+    if managed_pinprick_config?(config)
+      entries = params.fetch("pinprick-audit").fetch("accept-workflow-findings")
+      write_file(".pinprick.toml", render_template("pinprick.toml.erb", entries:), ".pinprick.toml")
+    end
     render_link_check(params.fetch("link-check")) if params["link-check"]
     render_codeql(params.fetch("codeql", {})) unless exception?(config, "codeql")
   end
@@ -1250,6 +1282,18 @@ class FleetSync
     return unless guard_changed_paths.include?(".fleet.yml")
 
     raise FleetError, guard_fleet_config_ownership_message
+  end
+
+  def managed_pinprick_config?(config)
+    config && config_params(config).fetch("pinprick-audit", {}).key?("accept-workflow-findings")
+  end
+
+  def reject_consumer_pinprick_config_edit(config)
+    return if hub_repo?
+    return unless managed_pinprick_config?(config) || managed_pinprick_config?(guard_base_config)
+    return unless guard_changed_paths.include?(".pinprick.toml")
+
+    raise FleetError, ".pinprick.toml is hub-owned audit policy; change fleet canon and deliver it through release/sync"
   end
 
   def reject_hidden_reusable_pins
@@ -1468,6 +1512,7 @@ class FleetSync
     files << "renovate.json" if params["renovate"]
     files << ".github/workflows/zizmor.yml" unless exception?(config, "zizmor")
     files << ".github/workflows/pinprick-audit.yml" unless exception?(config, "pinprick-audit")
+    files << ".pinprick.toml" if managed_pinprick_config?(config)
     files << ".github/workflows/link-check.yml" if params["link-check"]
     files << ".github/workflows/codeql.yml" if (params["codeql"] || {})["languages"] && !exception?(config, "codeql")
     files
