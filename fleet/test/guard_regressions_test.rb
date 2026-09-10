@@ -11,7 +11,6 @@ ROOT = File.expand_path("../..", __dir__)
 SYNC = ["ruby", "-rpathname", "fleet/sync.rb"].freeze
 CONCLUSION_WORKFLOW = File.join(ROOT, ".github/workflows/conclusion.yml")
 CONVENTIONAL_COMMITS_WORKFLOW = File.join(ROOT, ".github/workflows/reusable-conventional-commits.yml")
-PINPRICK_AUDIT_WORKFLOW = File.join(ROOT, ".github/workflows/pinprick-audit.yml")
 
 CommandResult = Struct.new(:stdout, :stderr, :status, keyword_init: true) do
   def output
@@ -205,6 +204,16 @@ class GuardRegressionsTest < Minitest::Test
     repo = scenario("clean-check")
 
     assert_sync_success(sync(repo, "--check"))
+  end
+
+  def test_guard_rejects_a_merge_critical_audit_removed_from_conclusion
+    repo = scenario("conclusion-audit-removed")
+    path = File.join(repo, ".github/workflows/conclusion.yml")
+    workflow = File.read(path).sub("      - audit\n", "")
+    File.write(path, workflow)
+    commit_all(repo, "remove audit dependency")
+
+    assert_rejects(["guard", guard(repo), "jobs omitted from the conclusion graph: audit"])
   end
 
   def test_renders_fleet_config_for_adoption
@@ -1503,7 +1512,6 @@ class ConclusionContractTest < Minitest::Test
   def setup
     @workflow = YAML.safe_load_file(CONCLUSION_WORKFLOW, permitted_classes: [], aliases: false)
     @jobs = @workflow.fetch("jobs")
-    @pinprick_audit = YAML.safe_load_file(PINPRICK_AUDIT_WORKFLOW, permitted_classes: [], aliases: false)
   end
 
   def test_every_pull_request_reports_exact_lowercase_conclusion
@@ -1627,7 +1635,7 @@ class ConclusionContractTest < Minitest::Test
     )
   end
 
-  def test_workflow_audit_gates_without_duplicating_the_sarif_upload
+  def test_workflow_audit_gates_at_pull_request_time
     assert_equal(
       { "audit" => "true", "fleet" => "true" },
       classify(".github/workflows/reusable-fleet-guard.yml")
@@ -1644,14 +1652,10 @@ class ConclusionContractTest < Minitest::Test
       audit.fetch("uses"),
       "/.github/workflows/reusable-pinprick-audit.yml@"
     )
-    assert_equal({ "contents" => "read" }, audit.fetch("permissions"))
-    assert_equal false, audit.fetch("with").fetch("advanced-security")
+    assert_equal({ "contents" => "read", "security-events" => "write" }, audit.fetch("permissions"))
+    assert_equal "${{ github.event.pull_request.head.repo.full_name == github.repository }}",
+                 audit.fetch("with").fetch("advanced-security")
     assert_equal true, audit.fetch("with").fetch("fail-on-findings")
-    assert_equal(
-      [".github/workflows/**"],
-      @pinprick_audit.fetch(true).fetch("pull_request").fetch("paths")
-    )
-
     assert_conclusion_success(
       "AUDIT_REQUIRED" => "true",
       "AUDIT_RESULT" => "success",

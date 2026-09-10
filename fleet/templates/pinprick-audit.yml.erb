@@ -1,9 +1,11 @@
 name: pinprick audit
 
 on:
+<% if pull_request -%>
   pull_request:
     paths:
       - ".github/workflows/**"
+<% end -%>
   push:
     branches:
       - main

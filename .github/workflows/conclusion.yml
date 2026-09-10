@@ -101,9 +101,10 @@ jobs:
     if: needs.changes.outputs.audit == 'true'
     permissions:
       contents: read
+      security-events: write # required for pinprick SARIF upload on same-repository changes
     uses: starhaven-io/.github/.github/workflows/reusable-pinprick-audit.yml@01259585bcefd122469b50cd7cbe6d593635619f # v2026.09.09.3
     with:
-      advanced-security: false
+      advanced-security: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
       fail-on-findings: true
 
   zizmor:

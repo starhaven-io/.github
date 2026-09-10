@@ -131,6 +131,15 @@ class GoldenRenderTest < Minitest::Test
     end
   end
 
+  def test_every_repository_declares_a_conclusion_contract_or_cited_exception
+    GoldenHelpers.repo_names.each do |name|
+      config = repo_config(name)
+      configured = params(config).key?("conclusion")
+      excepted = exception?(config, "conclusion")
+      assert configured ^ excepted, "#{name} must configure or cite exactly one conclusion contract outcome"
+    end
+  end
+
   def test_current_renderer_preflights_latest_release_templates
     workspace = Dir.mktmpdir("active-release-", GOLDEN_TMPDIR)
     release_root = File.join(workspace, "hub")
@@ -459,6 +468,12 @@ class GoldenRenderTest < Minitest::Test
     workflow = YAML.safe_load_file(File.join(repo_root, ".github/workflows/pinprick-audit.yml"),
                                    permitted_classes: [], aliases: false)
     with = workflow.fetch("jobs").fetch("audit").fetch("with")
+    triggers = workflow.fetch(true)
+    if params(config).dig("pinprick-audit", "pull-request") == false
+      refute triggers.key?("pull_request"), "pinprick-audit must not duplicate the aggregate for #{name}"
+    else
+      assert_equal [".github/workflows/**"], triggers.fetch("pull_request").fetch("paths")
+    end
     assert with.key?("advanced-security"), "pinprick-audit must pass advanced-security for #{name}"
     assert_equal params(config).dig("pinprick-audit", "fail-on-findings") != false,
                  with.fetch("fail-on-findings"),
