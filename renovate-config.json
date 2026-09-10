@@ -62,13 +62,13 @@
         "/^\\.github/workflows/[^/]+\\.ya?ml$/"
       ],
       "matchStrings": [
-        "VALE_SHA256:\\s*\"(?<currentDigest>[a-f0-9]{64})\"(?<between>[\\s\\S]*?)https://github\\.com/vale-cli/vale/releases/download/(?<currentValue>v\\d+(?:\\.\\d+){2})/vale_\\d+(?:\\.\\d+){2}_Linux_64-bit\\.tar\\.gz"
+        "VALE_SHA256:\\s*\"(?<currentDigest>[a-f0-9]{64})\"(?:[\\s\\S]*?)https://github\\.com/vale-cli/vale/releases/download/(?<currentValue>v\\d+(?:\\.\\d+){2})/vale_\\d+(?:\\.\\d+){2}_Linux_64-bit\\.tar\\.gz"
       ],
       "depNameTemplate": "Vale",
       "packageNameTemplate": "vale-cli/vale",
       "datasourceTemplate": "github-release-attachments",
       "versioningTemplate": "semver",
-      "autoReplaceStringTemplate": "VALE_SHA256: \"{{{newDigest}}}\"{{{between}}}https://github.com/vale-cli/vale/releases/download/{{{newValue}}}/vale_{{{replace '^v' '' newValue}}}_Linux_64-bit.tar.gz"
+      "autoReplaceStringTemplate": "{{#if newDigest}}{{{replace currentDigest newDigest (replace 'https://github[.]com/vale-cli/vale/releases/download/.*$' '' replaceString)}}}{{else}}{{{replace 'https://github[.]com/vale-cli/vale/releases/download/.*$' '' replaceString}}}{{/if}}https://github.com/vale-cli/vale/releases/download/{{{newValue}}}/vale_{{{replace '^v' '' newValue}}}_Linux_64-bit.tar.gz"
     },
     {
       "customType": "regex",
@@ -92,13 +92,12 @@
         "/^\\.github/workflows/[^/]+\\.ya?ml$/"
       ],
       "matchStrings": [
-        "LYCHEE_SHA256:\\s*\"(?<currentDigest>[a-f0-9]{64})\"(?<between>[\\s\\S]*?)releases/download/(?<currentValue>lychee-v\\d+(?:\\.\\d+){2})/lychee-x86_64-unknown-linux-gnu\\.tar\\.gz"
+        "LYCHEE_SHA256:\\s*\"(?<currentDigest>[a-f0-9]{64})\"(?:[\\s\\S]*?)releases/download/(?<currentValue>lychee-v\\d+(?:\\.\\d+){2})/lychee-x86_64-unknown-linux-gnu\\.tar\\.gz"
       ],
       "depNameTemplate": "lychee",
       "packageNameTemplate": "lycheeverse/lychee",
       "datasourceTemplate": "github-release-attachments",
-      "versioningTemplate": "regex:^lychee-v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$",
-      "autoReplaceStringTemplate": "LYCHEE_SHA256: \"{{{newDigest}}}\"{{{between}}}releases/download/{{{newValue}}}/lychee-x86_64-unknown-linux-gnu.tar.gz"
+      "versioningTemplate": "regex:^lychee-v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$"
     },
     {
       "customType": "regex",

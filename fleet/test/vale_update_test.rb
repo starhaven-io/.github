@@ -2,8 +2,20 @@
 
 require "json"
 require "minitest/autorun"
+require "open3"
 
 class ValeUpdateTest < Minitest::Test
+  def test_real_renovate_download_file_updates
+    runtime = File.expand_path("../validator/node_modules/renovate", __dir__)
+    unless File.directory?(runtime)
+      refute ENV.key?("FLEET_RENOVATE_VALIDATOR"), "configured Renovate runtime must be installed"
+      skip "install the locked fleet/validator dependencies to test Renovate file updates"
+    end
+
+    output, status = Open3.capture2e("node", File.expand_path("renovate_download_updates.mjs", __dir__))
+    assert status.success?, output
+  end
+
   def test_legacy_and_literal_downloads_have_exactly_one_update_owner
     preset = JSON.parse(File.read(File.expand_path("../../renovate-config.json", __dir__)))
     managers = preset.fetch("customManagers").select { |manager| manager["packageNameTemplate"] == "vale-cli/vale" }
@@ -31,8 +43,5 @@ class ValeUpdateTest < Minitest::Test
     literal_manager = managers.find { |manager| manager.fetch("description").start_with?("Update literal") }
     match = Regexp.new(literal_manager.fetch("matchStrings").first).match(literal)
     assert_equal "v3.19.0", match["currentValue"]
-    assert_includes literal_manager.fetch("autoReplaceStringTemplate"),
-                    "{{{newValue}}}/vale_{{{replace '^v' '' newValue}}}"
-    assert_includes literal_manager.fetch("autoReplaceStringTemplate"), "{{{newDigest}}}"
   end
 end
