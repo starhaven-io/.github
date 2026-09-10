@@ -17,7 +17,9 @@ params:
   pinprick-audit:
     advanced-security: "false"
     fail-on-findings: true
+    pull-request: false
     timeout-minutes: 5
     push-paths: [".github/workflows/**"]
 exceptions:
   codeql: "OpenTofu-only private infra; tofu.yml owns IaC validation"
+  conclusion: "org-ruleset: the exact-head Plan status gates the inline PR audit and remains the required merge gate"

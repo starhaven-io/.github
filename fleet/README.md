@@ -58,7 +58,7 @@ Tier 3 (rendered files and thin callers):
 | `.github/dependabot.yml` | rendered file | ecosystems, directories, and dependency policies |
 | `renovate.json` | rendered file | explicit shared-preset reference pinned to the current immutable fleet release; consumers with `renovate: true` |
 | `.github/workflows/zizmor.yml` | caller of `reusable-zizmor.yml` | extra push paths, optional PR paths, SARIF or direct gate, schedule, timeout |
-| `.github/workflows/pinprick-audit.yml` | caller of `reusable-pinprick-audit.yml` | `advanced-security` (false also drops the `security-events` grant), `fail-on-findings`, timeout |
+| `.github/workflows/pinprick-audit.yml` | caller of `reusable-pinprick-audit.yml` | `advanced-security` (false also drops the `security-events` grant), `fail-on-findings`, optional pull-request trigger, timeout |
 | `.github/workflows/link-check.yml` | caller of `reusable-link-check.yml` | targets, `build-site`, site directory, schedule |
 | `.github/workflows/codeql.yml` | caller of `reusable-codeql.yml` | languages, paths, runner, build mode and profile |
 | `.github/workflows/fleet-guard.yml` | caller of `reusable-fleet-guard.yml` | none |
@@ -71,6 +71,16 @@ repo-owned workflows, Fleet owns the identity, multiplicity, and pin of each
 established first-party reusable workflow call within its workflow file.
 Triggers, conditions, matrices, inputs, dependency edges, and surrounding job
 logic remain repo-owned.
+
+Every repository targeted by the organization Require Conclusion ruleset
+declares `params.conclusion`. The declaration names its repo-owned aggregate
+workflow, merge-critical audit jobs, any intermediate aggregates, and every
+deliberately noncritical job in that workflow. Orrery instead cites a
+`conclusion` exception because its repo-specific exact-head `Plan` status is the
+required gate. The guard validates the declared workflow on every human pull
+request: the unfiltered pull-request trigger, exact always-reporting
+`conclusion`, complete dependency graph, result inspection, and fail-closed
+pinprick configuration must remain intact.
 
 The organization-required `.github/workflows/dco-required.yml` and
 `.github/workflows/fleet-guard-required.yml` run from trusted hub `main` against
@@ -125,6 +135,10 @@ schema: 1
 visibility: "public"
 license: "agpl"
 params:
+  conclusion:
+    workflow: ".github/workflows/ci.yml"
+    audit-jobs: ["pinprick"]
+    pinprick-jobs: ["pinprick"]
   renovate: true
   codeql:
     languages: ["actions", "javascript-typescript"]
@@ -178,6 +192,24 @@ The shared link-check workflow runs the checker against the configured site
 directory before either `npm ci --strict-allow-scripts` path. Configuration
 validation requires every built site directory to be enrolled in
 `npm-policy.projects`.
+
+The pinprick audit decision is merge-critical on every pull request: a selected
+audit must succeed, and it may be skipped only after an explicit not-applicable
+routing decision. It runs inside each repository's repo-owned gate workflow so
+the required result observes the same workflow run. For Require Conclusion
+repositories, `needs` carries the result to `conclusion`; Orrery's validation
+workflow instead must succeed before its exact-head `Plan` status can pass. The
+fleet-rendered standalone caller retains its push and SARIF role; set
+`params.pinprick-audit.pull-request: false` once the inline job is live to avoid
+running the same audit twice on pull requests. Pinprick's build-from-source
+workflow stays repo-owned and push-only under its cited exception; its PR gate
+uses the fleet audit because released scanners do not accept a workflow file as
+a local action target. This temporarily loses PR-time build-from-source
+dogfooding in the engine repository: audit-behavior regressions can surface in
+that workflow only after merge. Restore that PR gate, and relax the guard's
+fleet-audit-only check, when the fleet-pinned scanner can follow local reusable
+workflow calls. Pinprick-action declares its self-test jobs as the audit rather
+than adding a redundant wrapper invocation.
 
 The `codecov: true` param syncs `scripts/upload-codecov.py`. Repository-owned CI
 produces coverage and any JUnit reports without upload credentials, saves them
@@ -443,7 +475,10 @@ copy while leaving the rest of the repo-owned CI topology flexible. Intentional
 moves or removals are coordinated through the trusted hub and its sync bot.
 This protects the reusable call itself, not its execution: repo-owned
 conditions, inputs, path selection, and dependency edges can still cause the
-job to be skipped, and the guard does not claim to enforce those surfaces.
+job to be skipped. The conclusion contract separately requires the aggregate
+to inspect every direct dependency result, rejects unclassified jobs, and
+requires audit jobs to be in the aggregate's dependency graph. Repository tests
+remain responsible for their path router's applicable-versus-skipped decisions.
 
 The guard reads its hub version from the caller pin in the consumer checkout,
 and in this hub it checks a PR against its own in-tree canon, since a hub PR

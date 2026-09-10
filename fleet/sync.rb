@@ -9,6 +9,7 @@ require "open3"
 require "yaml"
 require_relative "version"
 require_relative "codecov_policy"
+require_relative "conclusion_policy"
 
 class FleetError < StandardError; end
 
@@ -78,6 +79,7 @@ class FleetSync
     astro-docs
     codecov
     codeql
+    conclusion
     dependabot
     link-check
     npm-policy
@@ -95,6 +97,7 @@ class FleetSync
   EXCEPTION_KEYS = %w[
     audit
     codeql
+    conclusion
     pinprick-audit
     pinprick-audit-recipe
     zizmor
@@ -369,6 +372,7 @@ class FleetSync
     reject_hidden_reusable_pins
     reject_symlinked_workflow_paths(config)
     reject_reusable_workflow_declassification
+    validate_conclusion_ci_policy(config)
     validate_codecov_ci_policy(config)
 
     managed_changes = changed_managed_surfaces(config)
@@ -476,6 +480,10 @@ class FleetSync
 
     validate_params(params)
     validate_exceptions(exceptions)
+    if params.key?("conclusion") && exceptions.key?("conclusion")
+      raise FleetError, ".fleet.yml cannot configure and except the conclusion contract"
+    end
+
     validate_cross_parameter_invariants(params)
   end
 
@@ -493,6 +501,7 @@ class FleetSync
     validate_npm_policy(params["npm-policy"]) if params.key?("npm-policy")
     validate_link_check(params["link-check"]) if params.key?("link-check")
     validate_codeql(params["codeql"]) if params.key?("codeql")
+    validate_conclusion(params["conclusion"]) if params.key?("conclusion")
     validate_pinprick_audit(params["pinprick-audit"]) if params.key?("pinprick-audit")
     validate_zizmor(params["zizmor"]) if params.key?("zizmor")
     validate_readme(params["readme"]) if params.key?("readme")
@@ -664,15 +673,47 @@ class FleetSync
     validate_cron(value["schedule"], "#{path}.schedule") if value.key?("schedule")
   end
 
+  def validate_conclusion(value)
+    path = ".fleet.yml params.conclusion"
+    raise FleetError, "#{path} must be a mapping" unless value.is_a?(Hash)
+
+    reject_unknown_keys(
+      value,
+      %w[audit-jobs intermediate-aggregates noncritical-jobs pinprick-jobs workflow],
+      path
+    )
+    validate_plain_string(value["workflow"], "#{path}.workflow")
+    validate_workflow_path(value["workflow"])
+    validate_string_array(value, "audit-jobs", "#{path}.audit-jobs", nonempty: true)
+    raise FleetError, "#{path}.audit-jobs is required" unless value.key?("audit-jobs")
+
+    validate_string_array(value, "pinprick-jobs", "#{path}.pinprick-jobs")
+    validate_string_array(value, "intermediate-aggregates", "#{path}.intermediate-aggregates")
+    %w[audit-jobs pinprick-jobs intermediate-aggregates].each do |key|
+      Array(value[key]).each_with_index { |job, index| validate_identifier(job, "#{path}.#{key}[#{index}]") }
+      duplicates = Array(value[key]).tally.select { |_job, count| count > 1 }.keys
+      raise FleetError, "#{path}.#{key} contains duplicates: #{duplicates.sort.join(", ")}" if duplicates.any?
+    end
+
+    noncritical = value.fetch("noncritical-jobs", {})
+    raise FleetError, "#{path}.noncritical-jobs must be a mapping" unless noncritical.is_a?(Hash)
+
+    noncritical.each do |job, reason|
+      validate_identifier(job, "#{path}.noncritical-jobs job")
+      validate_plain_string(reason, "#{path}.noncritical-jobs.#{job}")
+    end
+  end
+
   def validate_pinprick_audit(value)
     path = ".fleet.yml params.pinprick-audit"
     raise FleetError, "#{path} must be a mapping" unless value.is_a?(Hash)
 
-    reject_unknown_keys(value, %w[advanced-security fail-on-findings push-paths timeout-minutes], path)
+    reject_unknown_keys(value, %w[advanced-security fail-on-findings pull-request push-paths timeout-minutes], path)
     if value.key?("advanced-security")
       validate_advanced_security(value["advanced-security"], "#{path}.advanced-security")
     end
     validate_boolean(value, "fail-on-findings", "#{path}.fail-on-findings")
+    validate_boolean(value, "pull-request", "#{path}.pull-request")
     validate_string_array(value, "push-paths", "#{path}.push-paths", nonempty: true)
     validate_integer(value, "timeout-minutes", "#{path}.timeout-minutes")
   end
@@ -1024,6 +1065,7 @@ class FleetSync
     advanced_security = pinprick_config.fetch("advanced-security", SAME_ORG_ADVANCED_SECURITY)
     advanced_security = advanced_security == "true" if %w[true false].include?(advanced_security)
     fail_on_findings = pinprick_config.fetch("fail-on-findings", true)
+    pull_request = pinprick_config.fetch("pull-request", true)
     push_paths = pinprick_config.fetch("push-paths", nil)
     timeout_minutes = pinprick_config.fetch("timeout-minutes", 15)
 
@@ -1036,6 +1078,7 @@ class FleetSync
         reusable_version: version,
         advanced_security: advanced_security,
         fail_on_findings: fail_on_findings,
+        pull_request: pull_request,
         push_paths: push_paths,
         timeout_minutes: timeout_minutes
       ),
@@ -1262,6 +1305,15 @@ class FleetSync
     CodecovPolicy.validate!(read_path(path))
   rescue CodecovPolicy::Error => e
     raise FleetError, "fleet guard: Codecov CI contract rejected: #{e.message}"
+  end
+
+  def validate_conclusion_ci_policy(config)
+    contract = config_params(config)["conclusion"]
+    return unless contract
+
+    ConclusionPolicy.validate!(repo_root: @repo_root.to_s, contract:)
+  rescue ConclusionPolicy::Error => e
+    raise FleetError, "fleet guard: conclusion contract rejected: #{e.message}"
   end
 
   def reject_symlinked_workflow_ancestors(path)
