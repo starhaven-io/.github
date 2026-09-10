@@ -3,6 +3,10 @@ visibility: "public"
 license: "mit"
 params:
   renovate: true
+  conclusion:
+    workflow: ".github/workflows/conclusion.yml"
+    audit-jobs: ["audit"]
+    pinprick-jobs: ["audit"]
   dependabot:
     - package-ecosystem: "bundler"
       group: "bundler-dependencies"
@@ -33,6 +37,7 @@ params:
   pinprick-audit:
     advanced-security: "${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}"
     fail-on-findings: true
+    pull-request: true
   readme:
     license:
       text: "This community metadata repository is licensed under the [MIT License](LICENSE)."
