@@ -72,6 +72,14 @@ established first-party reusable workflow call within its workflow file.
 Triggers, conditions, matrices, inputs, dependency edges, and surrounding job
 logic remain repo-owned.
 
+Adding a new first-party call is repo-owned authoring, provided its identity,
+full SHA and version comment match the canonical released workflow. The
+renderer updates existing calls; it does not insert jobs or edit `needs`.
+`params.conclusion` declares the required topology for validation, not job
+generation. This keeps routing and legitimate skips with the repository that
+can test them while Fleet enforces the shared contract. An established call
+cannot subsequently be removed, moved, or repinned by a consumer PR.
+
 Every repository targeted by the organization Require Conclusion ruleset
 declares `params.conclusion`. The declaration names its repo-owned aggregate
 workflow, merge-critical audit jobs, any intermediate aggregates, and every
@@ -199,17 +207,49 @@ routing decision. It runs inside each repository's repo-owned gate workflow so
 the required result observes the same workflow run. For Require Conclusion
 repositories, `needs` carries the result to `conclusion`; Orrery's validation
 workflow instead must succeed before its exact-head `Plan` status can pass. The
-fleet-rendered standalone caller retains its push and SARIF role; set
-`params.pinprick-audit.pull-request: false` once the inline job is live to avoid
-running the same audit twice on pull requests. Pinprick's build-from-source
-workflow stays repo-owned and push-only under its cited exception; its PR gate
-uses the fleet audit because released scanners do not accept a workflow file as
-a local action target. This temporarily loses PR-time build-from-source
-dogfooding in the engine repository: audit-behavior regressions can surface in
-that workflow only after merge. Restore that PR gate, and relax the guard's
-fleet-audit-only check, when the fleet-pinned scanner can follow local reusable
-workflow calls. Pinprick-action declares its self-test jobs as the audit rather
-than adding a redundant wrapper invocation.
+fleet-rendered standalone caller retains its push and SARIF role. Keep its PR
+trigger during adoption, even though migrated consumers temporarily run the
+audit twice. Retire duplication only in a subsequent canon change with
+`params.pinprick-audit.pull-request: false`, after the inline gate is merged
+and verified. Before writing any files, the renderer validates the replacement
+conclusion contract in the consumer being rendered. Missing or invalid gates
+block retirement in render, check, and publication-preflight modes, including
+sync-bot delivery. A declaration alone or an open consumer PR is not enough.
+This is a structural check; repository result/routing tests and exact-head
+hosted results remain necessary evidence before approving retirement.
+
+Repositories with a repository-specific gate rather than `conclusion` retain
+the standalone PR audit until Fleet has a validator for that replacement;
+an exception string alone cannot authorize retirement. Pinprick and
+pinprick-action retain their repo-owned audit workflow exceptions. Retain
+Pinprick's PR-time source dogfooding alongside its new released-engine gate;
+local reusable-workflow scanning is now supported by the released engine, so
+the scanner limitation no longer justifies making source dogfooding push-only.
+Making the local source audit itself a dependency of `conclusion` requires a
+coordinated Pinprick unit and an explicit local-audit contract in Fleet; it is
+separate from canonical-call admission. Pinprick-action declares its self-test
+jobs as its audit rather than adding a redundant wrapper invocation.
+
+### Conclusion contract delivery
+
+1. Merge canon and release/sync the contract and current audit pins, retaining
+   the standalone PR audit. Existing repo-owned gates remain unchanged.
+2. Refresh consumer PRs onto those synced bases. Introduce the inline call at
+   the delivered pin together with its `needs` edge, fail-closed result handling
+   and routing tests in one repo-owned unit. Do not edit existing managed calls
+   or rendered files. Verify both guards and the exact-head aggregate before
+   merge. Audit findings remain blockers, not migration exceptions.
+3. After each gate is live, separately review canon retiring that consumer's
+   duplicate PR audit, then release/sync it. The renderer checks the replacement
+   again on the actual consumer tree before removal. Leave duplication where
+   replacement validation is unavailable.
+
+There is no audit-free handoff: old gate plus standalone audit, then old gate
+plus the synced audit, then the new inline gate plus standalone audit, and only
+then the new gate alone. Repositories whose old aggregate omitted the audit
+remain incompletely gated until step 2; hold unrelated merges in those
+repositories during migration. Retaining an advisory standalone result does
+not retroactively make the old gate safe.
 
 The `codecov: true` param syncs `scripts/upload-codecov.py`. Repository-owned CI
 produces coverage and any JUnit reports without upload credentials, saves them
@@ -468,8 +508,8 @@ Dependabot PRs are exempt, and the job always reports a conclusion so the check
 can be required.
 
 First-party reusable workflow calls inside Tier 4 workflows are monotonic for
-consumer PRs: calls may be introduced, but a consumer PR cannot reduce the
-number of calls to a given reusable workflow within an existing workflow file.
+consumer PRs: canonical calls may be introduced, but a consumer PR cannot reduce
+the number of calls to a given reusable workflow within an existing workflow file.
 That prevents a policy job from being moved aside or replaced with a repo-local
 copy while leaving the rest of the repo-owned CI topology flexible. Intentional
 moves or removals are coordinated through the trusted hub and its sync bot.
@@ -479,6 +519,15 @@ job to be skipped. The conclusion contract separately requires the aggregate
 to inspect every direct dependency result, rejects unclassified jobs, and
 requires audit jobs to be in the aggregate's dependency graph. Repository tests
 remain responsible for their path router's applicable-versus-skipped decisions.
+
+A changed pin set is a reason to run render validation, not an automatic
+rejection. A new call at the expected release SHA and comment passes; a stale
+or arbitrary pin fails. The diagnostic reports the expected release and the
+offending call and line. GitHub tests the PR merge tree: a sync on the base can
+update the guard and established calls while a newly added call on an older
+branch remains stale. Compare the executed guard and effective merge tree,
+not just the caller in the PR head. Refresh after sync and recreate the new
+call at the delivered release; never hand-edit established pins to repair it.
 
 The guard reads its hub version from the caller pin in the consumer checkout,
 and in this hub it checks a PR against its own in-tree canon, since a hub PR

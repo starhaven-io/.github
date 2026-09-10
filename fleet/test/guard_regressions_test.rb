@@ -50,8 +50,8 @@ module GuardHelpers
     sync(repo, "--guard", "HEAD~1", "--hub")
   end
 
-  def consumer_guard(repo)
-    sync(repo, "--guard", "HEAD~1")
+  def consumer_guard(repo, base: "HEAD~1")
+    sync(repo, "--guard", base)
   end
 
   def fleet_config_path(repo)
@@ -106,6 +106,18 @@ module GuardHelpers
             pull-requests: read
       #{uses_line}
     YAML
+  end
+
+  def append_audit_call(repo, ref:, version:)
+    File.open(File.join(repo, ".github/workflows/ci.yml"), "a") do |file|
+      file.puts
+      file.write(<<~YAML.gsub(/^/, "  "))
+        pinprick:
+          uses: starhaven-io/.github/.github/workflows/reusable-pinprick-audit.yml@#{ref} # #{version}
+          with:
+            fail-on-findings: true
+      YAML
+    end
   end
 
   def commit_all(repo, message)
@@ -214,6 +226,64 @@ class GuardRegressionsTest < Minitest::Test
     commit_all(repo, "remove audit dependency")
 
     assert_rejects(["guard", guard(repo), "jobs omitted from the conclusion graph: audit"])
+  end
+
+  def test_retiring_standalone_pr_audit_requires_the_replacement_before_any_render_writes
+    repo = scenario("retire-audit-before-gate")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("pinprick-audit")["pull-request"] = false
+    write_fleet_config(repo, config)
+    path = File.join(repo, ".github/workflows/conclusion.yml")
+    File.write(path, File.read(path).sub("      - audit\n", ""))
+    before = git(repo, "diff", "--binary").stdout
+
+    assert_rejects(
+      ["render", sync(repo), "cannot disable the standalone PR audit before its replacement gate is valid"],
+      ["check", sync(repo, "--check"), "cannot disable the standalone PR audit before its replacement gate is valid"],
+      ["adopt", sync(repo, "--adopt"), "cannot disable the standalone PR audit before its replacement gate is valid"]
+    )
+    assert_equal before, git(repo, "diff", "--binary").stdout
+    workflow = YAML.safe_load_file(File.join(repo, ".github/workflows/pinprick-audit.yml"))
+    assert workflow.fetch(true).key?("pull_request")
+  end
+
+  def test_retiring_standalone_pr_audit_does_not_trust_a_cited_gate_exception
+    repo = scenario("retire-audit-excepted-gate")
+    config = fleet_config(repo)
+    config.fetch("params").delete("conclusion")
+    config.fetch("exceptions")["conclusion"] = "repository-specific gate"
+    config.fetch("params").fetch("pinprick-audit")["pull-request"] = false
+    write_fleet_config(repo, config)
+
+    assert_rejects(["render", sync(repo), "retain pull-request: true for a repository-specific gate"])
+  end
+
+  def test_retiring_standalone_pr_audit_preserves_a_valid_inline_gate_and_push_audit
+    repo = scenario("retire-audit-after-gate")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("pinprick-audit")["pull-request"] = false
+    write_fleet_config(repo, config)
+    path = File.join(repo, ".github/workflows/conclusion.yml")
+    before = File.read(path)
+
+    assert_sync_success(sync(repo))
+    assert_equal before, File.read(path)
+    workflow = YAML.safe_load_file(File.join(repo, ".github/workflows/pinprick-audit.yml"))
+    refute workflow.fetch(true).key?("pull_request")
+    assert workflow.fetch(true).key?("push")
+    assert_sync_success(sync(repo, "--check"))
+  end
+
+  def test_contract_can_be_delivered_before_inline_adoption_without_retiring_the_old_audit
+    repo = scenario("deliver-contract-before-gate")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("conclusion")["workflow"] = ".github/workflows/not-yet-adopted.yml"
+    write_fleet_config(repo, config)
+
+    assert_sync_success(sync(repo))
+    workflow = YAML.safe_load_file(File.join(repo, ".github/workflows/pinprick-audit.yml"))
+    assert workflow.fetch(true).key?("pull_request")
+    assert_sync_success(sync(repo, "--check"))
   end
 
   def test_renders_fleet_config_for_adoption
@@ -589,6 +659,44 @@ class GuardRegressionsTest < Minitest::Test
     commit_all(repo, "add ci workflow with canonical pin")
 
     assert_sync_success(consumer_guard(repo))
+  end
+
+  def test_audit_call_admission_across_adjacent_releases_uses_the_effective_pin
+    repo = scenario("audit-call-release-transition")
+    old_ref = fleet_ref(repo)
+    old_version = fleet_version(repo)
+    write_ci_workflow(repo, reusable_workflow_line(repo))
+    commit_all(repo, "old release base")
+    old_base = git(repo, "rev-parse", "HEAD").stdout.strip
+    append_audit_call(repo, ref: old_ref, version: old_version)
+    commit_all(repo, "introduce audit on old release")
+    assert_sync_success(consumer_guard(repo))
+
+    git(repo, "checkout", "-qb", "next-release-base", old_base)
+    new_version = "v2099.01.01.1"
+    File.write(File.join(repo, "fleet/VERSION"), "#{new_version}\n")
+    commit_all(repo, "next release with unchanged guard code")
+    git(repo, "tag", new_version)
+    new_ref = fleet_ref(repo)
+    assert_sync_success(sync(repo))
+    commit_all(repo, "sync existing base calls")
+    new_base = git(repo, "rev-parse", "HEAD").stdout.strip
+
+    # GitHub's merge tree has synced existing calls, but retains a newly added
+    # call from the stale feature branch. The guard must see that one mismatch.
+    append_audit_call(repo, ref: old_ref, version: old_version)
+    commit_all(repo, "introduce stale audit after base sync")
+    result = consumer_guard(repo)
+    assert_rejects(["guard", result, "reusable pin mismatch"])
+    assert_includes result.output, "expected @#{new_ref} # #{new_version}"
+    assert_includes result.output, "reusable-pinprick-audit.yml@#{old_ref} # #{old_version}"
+    refute_includes result.output, "reusable-conventional-commits.yml@"
+    assert_includes result.output, "New calls in repo-owned workflows are allowed"
+
+    write_ci_workflow(repo, reusable_workflow_line(repo))
+    append_audit_call(repo, ref: new_ref, version: new_version)
+    commit_all(repo, "recreate introduced audit at delivered pin")
+    assert_sync_success(consumer_guard(repo, base: new_base))
   end
 
   def test_rejects_removing_reusable_workflow_calls

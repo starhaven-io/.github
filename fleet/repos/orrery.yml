@@ -17,7 +17,7 @@ params:
   pinprick-audit:
     advanced-security: "false"
     fail-on-findings: true
-    pull-request: false
+    pull-request: true
     timeout-minutes: 5
     push-paths: [".github/workflows/**"]
 exceptions:

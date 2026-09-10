@@ -181,7 +181,6 @@ class FleetSync
 
     return run_guard(config) if @guard_base
 
-    adopt_missing_fences(config) if @adopt
     render_all(config)
     if @publication_preflight
       @changes.clear
@@ -195,12 +194,34 @@ class FleetSync
   private
 
   def render_all(config)
+    validate_pinprick_pr_retirement(config)
+    adopt_missing_fences(config) if @adopt
     retire_stale_surfaces(config)
     render_fleet_config
     render_tier1(config)
     render_tier2(config)
     render_tier3(config)
     render_reusable_workflow_pins
+  end
+
+  def validate_pinprick_pr_retirement(config)
+    return if exception?(config, "pinprick-audit")
+
+    params = config_params(config)
+    return unless params.dig("pinprick-audit", "pull-request") == false
+
+    # Sync-bot PRs bypass the human guard. Check the replacement before any
+    # render writes, including publication preflight, rather than trusting an
+    # unreleased declaration or a consumer PR that has not reached the base.
+    contract = params["conclusion"]
+    unless contract
+      raise FleetError, "cannot disable the standalone PR audit without a validated conclusion contract; " \
+                        "retain pull-request: true for a repository-specific gate"
+    end
+
+    ConclusionPolicy.validate!(repo_root: @repo_root.to_s, contract:)
+  rescue ConclusionPolicy::Error => e
+    raise FleetError, "cannot disable the standalone PR audit before its replacement gate is valid: #{e.message}"
   end
 
   def retire_stale_surfaces(config)
@@ -1729,9 +1750,33 @@ class FleetSync
   end
 
   def guard_failure_message(managed_changes)
-    "fleet guard: managed surface change rejected (#{managed_changes.join(", ")}); " \
-      "fleet-managed files and blocks change through fleet/repos/#{required_repo_name}.yml in starhaven-io/.github. " \
-      "After the hub change is released, the fleet sync bot renders it into the consumer."
+    message = "fleet guard: managed surface change rejected (#{managed_changes.join(", ")}); "
+    if managed_changes.any? { |changed| changed.label != "reusable-pins" }
+      message += "fleet-managed files and blocks change through fleet/repos/#{required_repo_name}.yml " \
+                 "in starhaven-io/.github. After release, the fleet sync bot renders them into the consumer. "
+    end
+    message + guard_pin_mismatch_message(managed_changes)
+  end
+
+  def guard_pin_mismatch_message(managed_changes)
+    paths = managed_changes.select { |changed| changed.label == "reusable-pins" }.map(&:path)
+    return "" if paths.empty?
+
+    ref, version = reusable_pin
+    mismatches = paths.flat_map do |path|
+      text = read_path(repo_path(path))
+      current_lines = text.lines
+      expected_lines = sync_reusable_pins(text, ref, version).lines
+      reusable_workflow_calls(text).filter_map do |call|
+        next if current_lines[call.line] == expected_lines[call.line]
+
+        "#{path}:#{call.line + 1} #{current_lines[call.line].strip}"
+      end
+    end
+    "reusable pin mismatch: expected @#{ref} # #{version}; found #{mismatches.join(", ")}. " \
+      "New calls in repo-owned workflows are allowed at the canonical release pin. " \
+      "Refresh the PR after fleet release/sync, then recreate only newly introduced calls at the delivered pin; " \
+      "existing managed pins and rendered callers must change through fleet sync."
   end
 
   def guard_declassification_message(surfaces)

@@ -48,7 +48,7 @@ params:
   pinprick-audit:
     advanced-security: "${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}"
     fail-on-findings: true
-    pull-request: false
+    pull-request: true
   readme:
     badges:
       workflow: "ci.yml"
