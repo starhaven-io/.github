@@ -1,0 +1,13 @@
+# Fleet-managed audit policy. Change fleet/repos/<name>.yml, then release/sync.
+# Exact accepted findings remain visible; incomplete coverage still fails.
+<% if entries.empty? -%>
+accept-workflow-findings = []
+<% else -%>
+<% entries.each do |entry| -%>
+
+[[accept-workflow-findings]]
+<% entry.each do |key, value| -%>
+<%= key %> = <%= JSON.generate(value) %>
+<% end -%>
+<% end -%>
+<% end -%>

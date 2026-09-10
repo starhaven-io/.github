@@ -874,6 +874,53 @@ class GuardRegressionsTest < Minitest::Test
     assert_rejects(["guard", consumer_guard(repo), ".fleet.yml is hub-owned fleet configuration"])
   end
 
+  def test_rejects_every_consumer_audit_policy_change_even_with_empty_acceptances
+    %w[content deletion mode symlink].each do |kind|
+      repo = scenario("audit-policy-#{kind}")
+      config = fleet_config(repo)
+      config.fetch("params").fetch("pinprick-audit")["accept-workflow-findings"] = []
+      write_fleet_config(repo, config)
+      assert_sync_success(sync(repo))
+      commit_all(repo, "adopt audit policy")
+      path = File.join(repo, ".pinprick.toml")
+      case kind
+      when "content" then File.write(path, "severity = \"high\"\n")
+      when "deletion" then File.unlink(path)
+      when "mode" then FileUtils.chmod(0o755, path)
+      when "symlink" then symlink_path_to_copy(repo, ".pinprick.toml", "policy.toml")
+      end
+      commit_all(repo, "change audit policy #{kind}")
+      assert_rejects([kind, consumer_guard(repo), ".pinprick.toml is hub-owned audit policy"])
+    end
+  end
+
+  def test_rejects_consumer_audit_policy_addition_matching_canon
+    repo = scenario("audit-policy-addition")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("pinprick-audit")["accept-workflow-findings"] = []
+    write_fleet_config(repo, config)
+    commit_all(repo, "declare audit policy before delivery")
+    assert_sync_success(sync(repo))
+    git(repo, "checkout", "HEAD", "--", ".fleet.yml")
+    commit_all(repo, "attempt consumer policy adoption")
+
+    assert_rejects(["addition", consumer_guard(repo), ".pinprick.toml is hub-owned audit policy"])
+  end
+
+  def test_rejects_broad_or_incomplete_audit_acceptances
+    valid = YAML.safe_load_file(File.join(ROOT, "fleet/repos/macOSdb.yml"))
+                .fetch("params").fetch("pinprick-audit").fetch("accept-workflow-findings").first
+    [{ "workflow" => ".github/workflows/*.yml" }, { "workflow-sha256" => "latest" },
+     { "reason" => " " }, { "ignore" => "shell_fetch" }, { "severity" => "all" }].each_with_index do |change, index|
+      repo = scenario("invalid-audit-policy-#{index}")
+      config = fleet_config(repo)
+      config.fetch("params").fetch("pinprick-audit")["accept-workflow-findings"] = [valid.merge(change)]
+      write_fleet_config(repo, config)
+
+      assert_rejects(["invalid acceptance", sync(repo), "accept-workflow-findings"])
+    end
+  end
+
   def test_allows_hub_fleet_config_edit
     repo = scenario("hub-config-edit")
     config = fleet_config(repo)

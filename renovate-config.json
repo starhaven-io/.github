@@ -57,6 +57,21 @@
     },
     {
       "customType": "regex",
+      "description": "Update literal Vale release URLs, archive names, and SHA-256 together; retain the legacy env-pair manager until consumers migrate.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "VALE_SHA256:\\s*\"(?<currentDigest>[a-f0-9]{64})\"(?<between>[\\s\\S]*?)https://github\\.com/vale-cli/vale/releases/download/(?<currentValue>v\\d+(?:\\.\\d+){2})/vale_\\d+(?:\\.\\d+){2}_Linux_64-bit\\.tar\\.gz"
+      ],
+      "depNameTemplate": "Vale",
+      "packageNameTemplate": "vale-cli/vale",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver",
+      "autoReplaceStringTemplate": "VALE_SHA256: \"{{{newDigest}}}\"{{{between}}}https://github.com/vale-cli/vale/releases/download/{{{newValue}}}/vale_{{{replace '^v' '' newValue}}}_Linux_64-bit.tar.gz"
+    },
+    {
+      "customType": "regex",
       "description": "Update OpenTofu versions pinned in GitHub Actions workflows.",
       "managerFilePatterns": [
         "/^\\.github/workflows/[^/]+\\.ya?ml$/"
