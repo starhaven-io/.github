@@ -31,7 +31,7 @@ class CodecovUploadTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="codecov-test-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         prior = Path.cwd()
         os.chdir(self.root)
         self.addCleanup(os.chdir, prior)
