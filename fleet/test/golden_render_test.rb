@@ -423,6 +423,9 @@ class GoldenRenderTest < Minitest::Test
 
   def assert_codeql(repo_root, name, config)
     codeql = params(config)["codeql"] || {}
+    if %w[midden pinprick].include?(name)
+      assert codeql["languages"] && !exception?(config, "codeql"), "#{name} must retain CodeQL coverage"
+    end
     return unless codeql["languages"] && !exception?(config, "codeql")
 
     workflow = YAML.safe_load_file(File.join(repo_root, ".github/workflows/codeql.yml"),
@@ -434,6 +437,36 @@ class GoldenRenderTest < Minitest::Test
     paths = codeql.fetch("paths", [])
     assert_equal paths, workflow.fetch(true).fetch("push").fetch("paths", []), "codeql paths mismatch for #{name}" \
       unless paths.empty?
+
+    assert_rust_codeql(workflow, name) if %w[midden pinprick].include?(name)
+  end
+
+  def assert_rust_codeql(workflow, name)
+    with = workflow.fetch("jobs").fetch("analyze").fetch("with")
+    assert_includes JSON.parse(with.fetch("languages")), "rust", "#{name} must scan Rust source"
+    assert_includes JSON.parse(with.fetch("languages")), "actions", "#{name} must retain workflow analysis"
+    assert_equal "none", with.fetch("build-mode"), "Rust extraction supports only build-mode none"
+    assert_equal "", with.fetch("build-profile"), "Rust extraction must not invoke a Swift build profile"
+    assert_equal "ubuntu-24.04", with.fetch("runner"), "Rust extraction needs the full runner's cargo and rustup"
+
+    inputs = %w[
+      src/main.rs src/memory/mod.rs tests/cli.rs build.rs Cargo.toml Cargo.lock
+      rust-toolchain rust-toolchain.toml rust-project.json .cargo/config .cargo/config.toml
+      crates/helper/src/lib.rs crates/helper/Cargo.toml crates/helper/Cargo.lock
+      crates/helper/.cargo/config.toml .github/workflows/codeql.yml
+    ]
+    inputs.push("audited-actions/actions/checkout.json", "catalog-minisign.pub") if name == "pinprick"
+    paths = workflow.fetch(true).fetch("push").fetch("paths").map do |pattern|
+      assert_match(%r{\A[A-Za-z0-9_./*-]+\z}, pattern, "unsupported CodeQL test glob: #{pattern}")
+      assert pattern.split("/").all? { |segment| segment == "**" || !segment.include?("**") },
+             "CodeQL test globs require ** to occupy a whole path segment: #{pattern}"
+      # Ruby requires a following slash for ** to match recursively, unlike GitHub's trailing /**.
+      pattern.sub(%r{/\*\*\z}, "/**/*")
+    end
+    inputs.each do |input|
+      assert paths.any? { |pattern| File.fnmatch?(pattern, input, File::FNM_PATHNAME | File::FNM_DOTMATCH) },
+             "#{name} CodeQL must run when #{input} changes"
+    end
   end
 
   def assert_zizmor(repo_root, name, config)

@@ -410,6 +410,16 @@ surface where it executes. The shared job bodies live in this hub:
 - `reusable-conventional-commits.yml`
 - `reusable-fleet-guard.yml`
 
+Pinprick and Midden scan Actions and Rust with `build-mode: none` on
+`ubuntu-24.04`, whose full runner image provides Cargo and rustup. Rust's
+[no-build extraction](https://docs.github.com/en/code-security/reference/code-scanning/codeql/build-options-for-compiled-languages#building-rust)
+still runs build scripts and compiles procedural macros. Their push filters
+cover Rust source, Cargo manifests and locks, toolchain and project metadata,
+and Cargo configuration. Pinprick also watches the audit catalog consumed by
+`build.rs` and the embedded catalog key. Changes to these settings belong in
+`fleet/repos/` and reach consumers through release/sync; validate the first
+hosted Rust extraction after delivery.
+
 ## Versions, Pins, and Releases
 
 Fleet releases are tagged with CalVer: `vYYYY.MM.DD.N`, N starting at 1 each
