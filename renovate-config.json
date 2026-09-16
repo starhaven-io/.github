@@ -8,6 +8,7 @@
     "mergeConfidence:all-badges"
   ],
   "enabledManagers": [
+    "ruby-version",
     "rust-toolchain",
     "custom.regex"
   ],

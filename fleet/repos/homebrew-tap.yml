@@ -2,6 +2,7 @@ schema: 1
 visibility: "public"
 license: "mit"
 params:
+  renovate: true
   conclusion:
     workflow: ".github/workflows/ci.yml"
     audit-jobs: ["pinprick"]
