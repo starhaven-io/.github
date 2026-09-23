@@ -290,11 +290,14 @@ class ReleaseWorkflowTest < Minitest::Test
       File.write(stub, <<~'SH')
         #!/bin/sh
         printf '%s\n' "$@" > "$ARGUMENT_LOG"
-        printf 'audit report\n'
+        case " $* " in
+          *" sarif "*) printf '{"runs":[{"results":[%s]}]}\n' "$SARIF_RESULTS" ;;
+          *) printf 'audit report\n' ;;
+        esac
         exit "$AUDIT_STATUS"
       SH
       File.chmod(0o755, stub)
-      %w[true false].product([0, 1, 3, 14]).each do |advanced, status|
+      %w[true false].product([0, 1, 3, 14], [0, 2]).each do |advanced, status, findings|
         output = File.join(directory, "output")
         arguments = File.join(directory, "arguments")
         File.write(output, "")
@@ -302,7 +305,8 @@ class ReleaseWorkflowTest < Minitest::Test
           "PATH" => "#{directory}#{File::PATH_SEPARATOR}#{ENV.fetch("PATH")}",
           "GITHUB_WORKSPACE" => directory, "RUNNER_TEMP" => directory, "GITHUB_OUTPUT" => output,
           "ZIZMOR_IMAGE" => "fixture-image", "ADVANCED_SECURITY" => advanced,
-          "ARGUMENT_LOG" => arguments, "AUDIT_STATUS" => status.to_s
+          "ARGUMENT_LOG" => arguments, "AUDIT_STATUS" => status.to_s,
+          "SARIF_RESULTS" => Array.new(findings, '{"ruleId":"fixture"}').join(",")
         }
         _stdout, stderr, result = run_bash(script, cwd: directory, env: environment)
         assert_equal status, result.exitstatus, stderr
@@ -311,7 +315,47 @@ class ReleaseWorkflowTest < Minitest::Test
         assert_includes actual, "--strict-collection"
         assert_equal ["--", "."], actual.last(2)
         assert_equal advanced == "true", actual.include?("sarif")
-        assert_equal advanced == "true" && status.zero?, File.read(output).include?("sarif-file=")
+        recorded = File.read(output)
+        assert_equal advanced == "true" && status.zero?, recorded.include?("sarif-file=")
+        assert_equal advanced == "true" && status.zero?, recorded.include?("findings=#{findings}\n")
+      end
+    end
+  end
+
+  def test_reusable_audit_rejects_unparseable_sarif
+    reusable = YAML.safe_load_file(
+      File.join(ROOT, ".github/workflows/reusable-zizmor.yml"), permitted_classes: [], aliases: false
+    )
+    script = step(reusable, "zizmor", "Analyze workflows").fetch("run")
+    Dir.mktmpdir("fleet-zizmor-sarif") do |directory|
+      File.write(File.join(directory, "docker"), "#!/bin/sh\nprintf 'not sarif\\n'\n")
+      File.chmod(0o755, File.join(directory, "docker"))
+      output = File.join(directory, "output")
+      environment = {
+        "PATH" => "#{directory}#{File::PATH_SEPARATOR}#{ENV.fetch("PATH")}",
+        "GITHUB_WORKSPACE" => directory, "RUNNER_TEMP" => directory, "GITHUB_OUTPUT" => output,
+        "ZIZMOR_IMAGE" => "fixture-image", "ADVANCED_SECURITY" => "true"
+      }
+      _stdout, _stderr, result = run_bash(script, cwd: directory, env: environment)
+      refute result.success?
+      refute_includes File.read(output), "findings="
+    end
+  end
+
+  def test_sarif_mode_gates_on_findings_after_the_upload
+    reusable = YAML.safe_load_file(
+      File.join(ROOT, ".github/workflows/reusable-zizmor.yml"), permitted_classes: [], aliases: false
+    )
+    steps = reusable.fetch("jobs").fetch("zizmor").fetch("steps").map { |candidate| candidate["name"] }
+    assert_operator steps.index("Upload SARIF"), :<, steps.index("Fail on findings")
+
+    gate = step(reusable, "zizmor", "Fail on findings")
+    assert_equal "inputs.advanced-security", gate.fetch("if")
+    assert_equal "${{ steps.analyze.outputs.findings }}", gate.fetch("env").fetch("FINDINGS")
+    Dir.mktmpdir("fleet-zizmor-gate") do |directory|
+      { "0" => true, "1" => false, "12" => false, "" => false, "1 2" => false, "-1" => false }.each do |count, passes|
+        stdout, stderr, result = run_bash(gate.fetch("run"), cwd: directory, env: { "FINDINGS" => count })
+        assert_equal passes, result.success?, "FINDINGS=#{count.inspect}: #{stdout}#{stderr}"
       end
     end
   end

@@ -467,7 +467,9 @@ This does not provide every expression-type or shell diagnostic from a general
 workflow linter; repository policy tests and existing ShellCheck gates remain
 separate checks. The shared workflow runs one digest-pinned Zizmor container,
 mounts the checkout read-only, and uploads SARIF only when `advanced-security`
-is enabled. `params.zizmor.advanced-security: false` renders a direct gate with
+is enabled. Both modes fail on any finding: zizmor exits 0 whenever it writes
+SARIF, so SARIF mode counts the uploaded results and fails after the upload.
+`params.zizmor.advanced-security: false` renders a direct gate with
 read-only permissions for repositories without code scanning; optional
 `pull-request-paths` retains their PR audit route. The shared Renovate Docker
 manager updates the `ZIZMOR_IMAGE` version and digest together in every hub

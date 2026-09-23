@@ -43,6 +43,8 @@ jobs:
             "${ZIZMOR_IMAGE}" "${arguments[@]}" -- . > "${report}"; then
             if [[ "${ADVANCED_SECURITY}" == "true" ]]; then
               echo "sarif-file=${report}" >> "${GITHUB_OUTPUT}"
+              findings=$(jq '[.runs[].results[]?] | length' "${report}")
+              echo "findings=${findings}" >> "${GITHUB_OUTPUT}"
             else
               cat "${report}"
             fi
@@ -58,3 +60,20 @@ jobs:
         with:
           sarif_file: ${{ steps.analyze.outputs.sarif-file }}
           category: zizmor
+
+      # zizmor exits 0 whenever it writes SARIF, so gate only after the upload
+      # has put the findings in code scanning.
+      - name: Fail on findings
+        if: inputs.advanced-security
+        env:
+          FINDINGS: ${{ steps.analyze.outputs.findings }}
+        shell: bash -euo pipefail {0}
+        run: |
+          if [[ ! "${FINDINGS}" =~ ^[0-9]+$ ]]; then
+            echo "::error::zizmor did not report a SARIF finding count"
+            exit 1
+          fi
+          if (( FINDINGS > 0 )); then
+            echo "::error::zizmor reported ${FINDINGS} finding(s); see the zizmor code-scanning category for details"
+            exit 1
+          fi
