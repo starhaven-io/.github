@@ -35,6 +35,7 @@ params:
     paths:
       - "src/**"
       - "public/**"
+      - "scripts/**"
       - ".github/workflows/**"
       - "astro.config.mjs"
       - "package-lock.json"
