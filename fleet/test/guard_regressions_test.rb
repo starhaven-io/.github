@@ -1790,6 +1790,13 @@ class ConclusionContractTest < Minitest::Test
     )
   end
 
+  def test_required_guard_workflow_changes_run_the_workflow_contract_suite
+    assert_equal(
+      { "audit" => "true", "fleet" => "true" },
+      classify(".github/workflows/fleet-guard-required.yml")
+    )
+  end
+
   def test_workflow_audit_gates_at_pull_request_time
     assert_equal(
       { "audit" => "true", "fleet" => "true" },
