@@ -171,6 +171,18 @@ module GuardHelpers
       file.puts("# fleet:end")
     end
   end
+
+  def enable_strict_allow_scripts(repo)
+    config = fleet_config(repo)
+    policy = config.fetch("params").fetch("npm-policy")
+    policy["strict-allow-scripts"] = true
+    write_fleet_config(repo, config)
+    policy.fetch("projects").each do |project|
+      path = File.join(repo, project, ".npmrc")
+      FileUtils.mkdir_p(File.dirname(path))
+      File.write(path, "# fleet:block npm-policy\n# fleet:end\n")
+    end
+  end
 end
 
 TMPDIR = Dir.mktmpdir("fleet-guard-regressions-")
@@ -1293,6 +1305,60 @@ class GuardRegressionsTest < Minitest::Test
     write_fleet_config(repo, config)
 
     assert_rejects(["sync", sync(repo), ".fleet.yml params.npm-policy contains unknown keys: dirs"])
+  end
+
+  def test_renders_strict_allow_scripts_into_each_policy_project
+    repo = scenario("npm-policy-npmrc")
+    enable_npm_policy(repo, [".", "site"])
+    enable_strict_allow_scripts(repo)
+    site_npmrc = File.join(repo, "site/.npmrc")
+    File.write(site_npmrc, "cache=../var/cache/npm\n\n#{File.read(site_npmrc)}")
+
+    assert_sync_success(sync(repo))
+
+    block = "# fleet:block npm-policy\nstrict-allow-scripts=true\n# fleet:end\n"
+    assert_equal block, File.read(File.join(repo, ".npmrc"))
+    assert_equal "cache=../var/cache/npm\n\n#{block}", File.read(site_npmrc)
+    assert_sync_success(sync(repo, "--check"))
+  end
+
+  def test_guards_the_strict_allow_scripts_block_but_not_repo_settings
+    repo = scenario("npm-policy-npmrc-edit")
+    enable_npm_policy(repo, ["site"])
+    enable_strict_allow_scripts(repo)
+    assert_sync_success(sync(repo))
+    commit_all(repo, "adopt npm-policy surfaces")
+
+    path = File.join(repo, "site/.npmrc")
+    File.write(path, "cache=../var/cache/npm\n\n#{File.read(path)}")
+    commit_all(repo, "add a repo-owned npm setting")
+    assert_sync_success(guard(repo))
+
+    File.write(path, File.read(path).sub("strict-allow-scripts=true", "strict-allow-scripts=false"))
+    commit_all(repo, "weaken the install-script policy")
+    assert_rejects(["guard", guard(repo), "fleet guard: managed surface change rejected"])
+  end
+
+  def test_strict_allow_scripts_requires_each_project_npmrc
+    repo = scenario("npm-policy-npmrc-missing")
+    enable_npm_policy(repo, ["site"])
+    enable_strict_allow_scripts(repo)
+    FileUtils.rm(File.join(repo, "site/.npmrc"))
+
+    assert_rejects(
+      ["sync", sync(repo), "site/.npmrc is missing"],
+      ["sync --adopt", sync(repo, "--adopt"), "site/.npmrc is missing"]
+    )
+  end
+
+  def test_rejects_non_boolean_strict_allow_scripts
+    repo = scenario("npm-policy-npmrc-invalid")
+    enable_npm_policy(repo, ["site"])
+    config = fleet_config(repo)
+    config.fetch("params").fetch("npm-policy")["strict-allow-scripts"] = "true"
+    write_fleet_config(repo, config)
+
+    assert_rejects(["sync", sync(repo), ".fleet.yml params.npm-policy.strict-allow-scripts must be true or false"])
   end
 
   def test_adopt_appends_missing_fences_and_renders

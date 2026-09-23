@@ -659,7 +659,8 @@ class FleetSync
     path = ".fleet.yml params.npm-policy"
     raise FleetError, "#{path} must be a mapping" unless value.is_a?(Hash)
 
-    reject_unknown_keys(value, %w[projects], path)
+    reject_unknown_keys(value, %w[projects strict-allow-scripts], path)
+    validate_boolean(value, "strict-allow-scripts", "#{path}.strict-allow-scripts")
     projects = value["projects"]
     raise FleetError, "#{path}.projects must be an array" unless projects.is_a?(Array)
     raise FleetError, "#{path}.projects must not be empty" if projects.empty?
@@ -1012,6 +1013,10 @@ class FleetSync
       replace_marked_block("justfile", name, :hash, body)
     end
 
+    npmrc_paths(params).each do |path|
+      replace_marked_block(path, "npm-policy", :hash, read_path(hub_path("blocks/npm-policy.npmrc")))
+    end
+
     readme = params["readme"].is_a?(Hash) ? params["readme"] : {}
     if readme["badges"]
       badges = render_template(
@@ -1034,6 +1039,15 @@ class FleetSync
       extra_license_lines: license_block.fetch("extra", [])
     )
     replace_marked_block("README.md", "license-section", :markdown, body)
+  end
+
+  # npm reads project config only from the .npmrc beside each package.json, so
+  # every policy project carries its own copy of the block.
+  def npmrc_paths(params)
+    policy = params["npm-policy"]
+    return [] unless policy.is_a?(Hash) && policy["strict-allow-scripts"] == true
+
+    policy.fetch("projects").map { |project| project == "." ? ".npmrc" : "#{project}/.npmrc" }
   end
 
   def managed_just_bodies(config)
@@ -1526,6 +1540,7 @@ class FleetSync
       { path: "justfile", name: "install-hooks", style: :hash }
     ]
     blocks << { path: "justfile", name: "npm-policy", style: :hash } if params["npm-policy"]
+    npmrc_paths(params).each { |path| blocks << { path:, name: "npm-policy", style: :hash } }
     blocks << { path: "justfile", name: "audit", style: :hash } unless exception?(config, "audit")
     blocks << { path: "justfile", name: "pinprick-audit", style: :hash } unless exception?(config,
                                                                                            "pinprick-audit-recipe")
