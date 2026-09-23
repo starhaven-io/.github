@@ -77,9 +77,9 @@ Top level:
 - `validator/`: the locked Renovate CLI used to validate the shared preset and
   every rendered adopter stub in CI.
 - `test/`: hook and npm policy tests, the guard and renderer regression suite,
-  the DCO, conclusion, and conventional-commits workflow contract tests, and
-  golden-render tests that render every consumer config into a synthetic
-  skeleton; run them through the locked bundle (`just tests`).
+  the DCO, required-guard, conclusion, and conventional-commits workflow
+  contract tests, and golden-render tests that render every consumer config
+  into a synthetic skeleton; run them through the locked bundle (`just tests`).
 - `VERSION`: the current CalVer fleet release, tagged on merge.
 
 `.github/workflows/`, hub-facing:
