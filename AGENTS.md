@@ -113,8 +113,9 @@ thin callers: `reusable-codeql.yml`, `reusable-conventional-commits.yml`,
 
 `renovate-config.json` is the estate's shared Renovate policy for tool pins that
 no Dependabot ecosystem owns: `.ruby-version`, the `rust-toolchain` channel,
-and `custom.regex` matches for `cargo install` pins, the Vale release/SHA-256
-pair, `TOFU_VERSION`, and the version/digest pair in `ZIZMOR_IMAGE`. Dependabot
+and `custom.regex` matches for `cargo install` pins, the Vale, lychee, and
+typos release/SHA-256 pairs, `TOFU_VERSION`, and the version/digest pair in
+`ZIZMOR_IMAGE`. Dependabot
 keeps every ecosystem declared by each consumer's fleet-rendered
 `.github/dependabot.yml`. Do not add a manager here that duplicates one of those
 ecosystems.

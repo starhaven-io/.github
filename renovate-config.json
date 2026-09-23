@@ -102,6 +102,21 @@
     },
     {
       "customType": "regex",
+      "description": "Update typos's release archive SHA-256 and the literal download URL together.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "TYPOS_SHA256:\\s*\"(?<currentDigest>[a-f0-9]{64})\"(?:[\\s\\S]*?)https://github\\.com/crate-ci/typos/releases/download/(?<currentValue>v\\d+(?:\\.\\d+){2})/typos-v\\d+(?:\\.\\d+){2}-x86_64-unknown-linux-musl\\.tar\\.gz"
+      ],
+      "depNameTemplate": "typos",
+      "packageNameTemplate": "crate-ci/typos",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver",
+      "autoReplaceStringTemplate": "{{#if newDigest}}{{{replace currentDigest newDigest (replace 'https://github[.]com/crate-ci/typos/releases/download/.*$' '' replaceString)}}}{{else}}{{{replace 'https://github[.]com/crate-ci/typos/releases/download/.*$' '' replaceString}}}{{/if}}https://github.com/crate-ci/typos/releases/download/{{{newValue}}}/typos-{{{newValue}}}-x86_64-unknown-linux-musl.tar.gz"
+    },
+    {
+      "customType": "regex",
       "description": "Update the strict workflow audit container version and digest together.",
       "managerFilePatterns": [
         "/^\\.github/workflows/[^/]+\\.ya?ml$/"

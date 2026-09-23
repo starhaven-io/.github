@@ -25,6 +25,12 @@ const cases = [
     newUrl: 'https://github.com/lycheeverse/lychee/releases/download/lychee-v0.25.0/lychee-x86_64-unknown-linux-gnu.tar.gz',
     comment: '# Preserve this explanation about 0.24.2.',
   },
+  {
+    packageName: 'crate-ci/typos', name: 'TYPOS', oldTag: 'v1.50.2', newTag: 'v1.51.0',
+    oldUrl: 'https://github.com/crate-ci/typos/releases/download/v1.50.2/typos-v1.50.2-x86_64-unknown-linux-musl.tar.gz',
+    newUrl: 'https://github.com/crate-ci/typos/releases/download/v1.51.0/typos-v1.51.0-x86_64-unknown-linux-musl.tar.gz',
+    comment: '# Preserve this explanation about v1.50.2.',
+  },
 ];
 const localDir = await mkdtemp(join(tmpdir(), 'fleet-renovate-update-'));
 GlobalConfig.set({ localDir });
@@ -78,7 +84,7 @@ jobs:
       assert.equal(after.currentDigest, changesDigest ? newDigest : oldDigest);
     }
   }
-  process.stdout.write('Renovate download updates: 6 real file-update cases passed.\n');
+  process.stdout.write(`Renovate download updates: ${cases.length * 3} real file-update cases passed.\n`);
 } finally {
   GlobalConfig.reset();
   await rm(localDir, { recursive: true, force: true });
