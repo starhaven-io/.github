@@ -46,7 +46,8 @@ module RequiredGuardWorkflow
       git(repo, "init", "-q", "-b", "main")
       commit_all(repo, "baseline")
       version = File.read(File.join(repo, "fleet/VERSION")).strip
-      git(repo, "-c", "tag.gpgSign=false", "tag", "-a", version, "-m", "Fleet #{version}")
+      git(repo, "-c", "user.name=Required Guard Test", "-c", "user.email=guard@example.invalid",
+          "-c", "tag.gpgSign=false", "tag", "-a", version, "-m", "Fleet #{version}")
       _stdout, stderr, status = Open3.capture3(
         { "GITHUB_REPOSITORY" => nil },
         "ruby", "fleet/sync.rb", "--hub-root", ".", "--repo-root", ".", "--repo-name", ".github",
