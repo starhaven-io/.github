@@ -4,6 +4,7 @@ require "fileutils"
 require "minitest/autorun"
 require "open3"
 require "tmpdir"
+require_relative "isolated_git_env"
 
 class PrePushHookTest < Minitest::Test
   HOOK = File.expand_path("../files/pre-push", __dir__)
@@ -124,13 +125,7 @@ class PrePushHookTest < Minitest::Test
   private
 
   def git_env(overrides = {})
-    {
-      "GIT_COMMON_DIR" => nil,
-      "GIT_DIR" => nil,
-      "GIT_INDEX_FILE" => nil,
-      "GIT_OBJECT_DIRECTORY" => nil,
-      "GIT_PREFIX" => nil,
-      "GIT_WORK_TREE" => nil,
+    ISOLATED_GIT_ENV.merge(
       "GIT_CONFIG_GLOBAL" => File::NULL,
       "GIT_CONFIG_NOSYSTEM" => "1",
       "GIT_AUTHOR_NAME" => "Fleet Hook Test",
@@ -139,7 +134,7 @@ class PrePushHookTest < Minitest::Test
       "GIT_COMMITTER_EMAIL" => "hooks@example.invalid",
       "HOOK_TEST_MARKER" => @marker,
       "PATH" => "#{@bin}#{File::PATH_SEPARATOR}#{ENV.fetch("PATH")}"
-    }.merge(overrides)
+    ).merge(overrides)
   end
 
   def git(*args)

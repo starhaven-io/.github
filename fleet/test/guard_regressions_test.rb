@@ -6,6 +6,7 @@ require "open3"
 require "tmpdir"
 require "yaml"
 require "minitest/autorun"
+require_relative "isolated_git_env"
 
 ROOT = File.expand_path("../..", __dir__)
 SYNC = ["ruby", "-rpathname", "fleet/sync.rb"].freeze
@@ -26,12 +27,11 @@ module GuardHelpers
   module_function
 
   def run_command(cwd, *argv)
-    stdout, stderr, status = Open3.capture3(*argv, chdir: cwd)
-    CommandResult.new(stdout: stdout, stderr: stderr, status: status)
+    run_command_env({}, cwd, *argv)
   end
 
   def run_command_env(env, cwd, *argv)
-    stdout, stderr, status = Open3.capture3(env, *argv, chdir: cwd)
+    stdout, stderr, status = Open3.capture3(ISOLATED_GIT_ENV.merge(env), *argv, chdir: cwd)
     CommandResult.new(stdout: stdout, stderr: stderr, status: status)
   end
 
@@ -228,6 +228,33 @@ class GuardRegressionsTest < Minitest::Test
     repo = scenario("clean-check")
 
     assert_sync_success(sync(repo, "--check"))
+  end
+
+  def test_fixture_git_ignores_an_inherited_linked_worktree_git_dir
+    outer = File.join(TMPDIR, "inherited-git-dir")
+    linked = File.join(TMPDIR, "inherited-git-dir-worktree")
+    fixture = File.join(TMPDIR, "inherited-git-dir-fixture")
+    FileUtils.mkdir_p([outer, fixture])
+    git(outer, "init", "-q")
+    File.write(File.join(outer, "outer.txt"), "outer\n")
+    commit_all(outer, "outer baseline")
+    git(outer, "worktree", "add", "-q", "-b", "linked", linked)
+    outer_state = -> { [File.read(File.join(outer, ".git/config")), git(outer, "for-each-ref").stdout] }
+    before = outer_state.call
+    File.write(File.join(fixture, "fixture.txt"), "fixture\n")
+
+    inherited = ENV.fetch("GIT_DIR", nil)
+    ENV["GIT_DIR"] = git(linked, "rev-parse", "--absolute-git-dir").stdout.strip
+    begin
+      git(fixture, "init", "-q")
+      commit_all(fixture, "fixture baseline")
+      git(fixture, "tag", "fixture-tag")
+    ensure
+      ENV["GIT_DIR"] = inherited
+    end
+
+    assert_equal before, outer_state.call
+    assert_equal "fixture baseline", git(fixture, "log", "-1", "--format=%s", "fixture-tag").stdout.strip
   end
 
   def test_guard_rejects_a_merge_critical_audit_removed_from_conclusion

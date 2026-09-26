@@ -5,6 +5,7 @@ require "open3"
 require "tmpdir"
 require "yaml"
 require "minitest/autorun"
+require_relative "isolated_git_env"
 
 DCO_ROOT = File.expand_path("../..", __dir__)
 DCO_WORKFLOW = File.join(DCO_ROOT, ".github/workflows/dco-required.yml")
@@ -226,7 +227,7 @@ class DcoWorkflowTest < Minitest::Test
     SH
     FileUtils.chmod(0o755, gh)
     stdout, stderr, status = Open3.capture3(
-      {
+      ISOLATED_GIT_ENV.merge(
         "ACTOR" => actor,
         "BASE_REF" => base_ref,
         "BASE_SHA" => payload_base,
@@ -235,7 +236,7 @@ class DcoWorkflowTest < Minitest::Test
         "HEAD_SHA" => head,
         "PATH" => "#{shim_dir}:#{ENV.fetch("PATH")}",
         "VERIFIED_DEPENDABOT_COMMITS" => verified_dependabot_commits.join(",")
-      },
+      ),
       "bash", "-euo", "pipefail", "-c", @script,
       chdir: repo
     )
@@ -245,7 +246,7 @@ class DcoWorkflowTest < Minitest::Test
   end
 
   def git(repo, *args)
-    stdout, stderr, status = Open3.capture3("git", *args, chdir: repo)
+    stdout, stderr, status = Open3.capture3(ISOLATED_GIT_ENV, "git", *args, chdir: repo)
     raise "git #{args.join(" ")} failed:\n#{stdout}#{stderr}" unless status.success?
 
     stdout
