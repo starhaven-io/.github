@@ -116,6 +116,13 @@ module GoldenHelpers
       <!-- fleet:block license-section -->
       <!-- fleet:end -->
     MARKDOWN
+
+    return unless File.exist?(File.join(ROOT, "fleet/repos/#{name}.yml"))
+
+    Array((repo_config(name)["params"] || {}).dig("npm-policy", "projects")).each do |project|
+      FileUtils.mkdir_p(File.join(repo_root, project))
+      File.write(File.join(repo_root, project, ".npmrc"), "# fleet:block npm-policy\n# fleet:end\n")
+    end
   end
 end
 
@@ -362,6 +369,12 @@ class GoldenRenderTest < Minitest::Test
     projects = params(config).fetch("npm-policy").fetch("projects")
     assert_includes File.read(File.join(repo_root, "justfile")),
                     "node scripts/check-npm-install-policy.mjs #{projects.join(" ")}"
+    return unless params(config).dig("npm-policy", "strict-allow-scripts")
+
+    projects.each do |project|
+      assert_includes File.read(File.join(repo_root, project, ".npmrc")), "\nstrict-allow-scripts=true\n",
+                      "#{project}/.npmrc must enforce the install-script policy"
+    end
   end
 
   def assert_workflow_shapes(repo_root, name, config)

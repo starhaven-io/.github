@@ -178,6 +178,7 @@ class FleetSync
     validate_rendered_config_path
     assert_unique_marked_blocks(config)
     assert_unique_just_recipes(config)
+    assert_unique_npmrc_policy(config)
 
     return run_guard(config) if @guard_base
 
@@ -659,7 +660,8 @@ class FleetSync
     path = ".fleet.yml params.npm-policy"
     raise FleetError, "#{path} must be a mapping" unless value.is_a?(Hash)
 
-    reject_unknown_keys(value, %w[projects], path)
+    reject_unknown_keys(value, %w[projects strict-allow-scripts], path)
+    validate_boolean(value, "strict-allow-scripts", "#{path}.strict-allow-scripts")
     projects = value["projects"]
     raise FleetError, "#{path}.projects must be an array" unless projects.is_a?(Array)
     raise FleetError, "#{path}.projects must not be empty" if projects.empty?
@@ -1012,6 +1014,10 @@ class FleetSync
       replace_marked_block("justfile", name, :hash, body)
     end
 
+    npmrc_paths(params).each do |path|
+      replace_marked_block(path, "npm-policy", :hash, read_path(hub_path("blocks/npm-policy.npmrc")))
+    end
+
     readme = params["readme"].is_a?(Hash) ? params["readme"] : {}
     if readme["badges"]
       badges = render_template(
@@ -1034,6 +1040,50 @@ class FleetSync
       extra_license_lines: license_block.fetch("extra", [])
     )
     replace_marked_block("README.md", "license-section", :markdown, body)
+  end
+
+  # npm reads project config only from the .npmrc beside each package.json, so
+  # every policy project carries its own copy of the block.
+  def npmrc_paths(params)
+    policy = params["npm-policy"]
+    return [] unless policy.is_a?(Hash) && policy["strict-allow-scripts"] == true
+
+    policy.fetch("projects").map { |project| project == "." ? ".npmrc" : "#{project}/.npmrc" }
+  end
+
+  def assert_unique_npmrc_policy(config)
+    npmrc_paths(config_params(config)).each do |relative|
+      next if @guard_base && !guard_changed_paths.include?(relative)
+
+      path = repo_path(relative)
+      next unless regular_file?(path)
+
+      local = read_path(path).sub(marker_regex("npm-policy", :hash), "")
+      local.each_line do |line|
+        next if line.lstrip.start_with?("#", ";")
+        if line.match?(/\A\s*\[[^\]]*\]\s*\z/)
+          raise FleetError, "#{relative} must not use INI sections, which can hide the managed npm policy"
+        end
+        next unless npmrc_key(line) == "strict-allow-scripts"
+
+        raise FleetError, "#{relative} defines strict-allow-scripts outside fleet:block npm-policy"
+      end
+    end
+  end
+
+  def npmrc_key(line)
+    key = line.split("=", 2).first.to_s.strip
+    if key.start_with?("'") && key.end_with?("'")
+      key = key[1...-1]
+    elsif !key.start_with?('"')
+      key = key.split(/[;#]/, 2).first.to_s.strip
+    end
+    begin
+      key = JSON.parse(key) if key.start_with?('"') && key.end_with?('"')
+    rescue JSON::ParserError
+      # npm's INI parser also retains malformed quoted keys literally.
+    end
+    key.delete_suffix("[]")
   end
 
   def managed_just_bodies(config)
@@ -1526,6 +1576,7 @@ class FleetSync
       { path: "justfile", name: "install-hooks", style: :hash }
     ]
     blocks << { path: "justfile", name: "npm-policy", style: :hash } if params["npm-policy"]
+    npmrc_paths(params).each { |path| blocks << { path:, name: "npm-policy", style: :hash } }
     blocks << { path: "justfile", name: "audit", style: :hash } unless exception?(config, "audit")
     blocks << { path: "justfile", name: "pinprick-audit", style: :hash } unless exception?(config,
                                                                                            "pinprick-audit-recipe")

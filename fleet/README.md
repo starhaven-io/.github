@@ -46,6 +46,7 @@ Tier 2 (managed blocks):
 | `local-state` | `.gitignore` | all consumers; the org-minimum header section |
 | `install-hooks` | `justfile` | all consumers |
 | `npm-policy` | `justfile` | consumers with `npm-policy`; parameterized by project directories |
+| `npm-policy` | `.npmrc` in each `npm-policy` project | consumers with `npm-policy.strict-allow-scripts: true`; enables `allowScripts` enforcement by default |
 | `audit` | `justfile` | all workflow-owning consumers |
 | `pinprick-audit` | `justfile` | all consumers without a cited exception |
 | `badges` + `license-section` | `README.md` | public project repos, parameterized by repo name and badge workflow |
@@ -222,6 +223,23 @@ directory before either `npm ci --strict-allow-scripts` path. Configuration
 validation requires every built site directory to be enrolled in
 `npm-policy.projects`.
 
+Without strict mode, npm runs an unreviewed install script with only a notice,
+so a local `npm install` or `npm update` bypasses the policy that CI enforces.
+`strict-allow-scripts: true` renders `strict-allow-scripts=true` into a
+`# fleet:block npm-policy` fence in the `.npmrc` beside each project's
+`package.json`, where npm reads project configuration. Settings outside the
+fence stay repo-owned, but cannot redefine `strict-allow-scripts` or use INI
+sections that would hide the managed setting. Command-line and environment
+overrides still follow npm precedence. Each project must carry the fence, even in an
+otherwise empty `.npmrc`, before the key is enabled:
+
+```yaml
+params:
+  npm-policy:
+    projects: [".", "site"]
+    strict-allow-scripts: true
+```
+
 The pinprick audit decision is merge-critical on every pull request: a selected
 audit must succeed, and it may be skipped only after an explicit not-applicable
 routing decision. It runs inside each repository's repo-owned gate workflow so
@@ -387,6 +405,9 @@ block belongs. The consumer must carry, empty or populated:
 - `README.md`: `<!-- fleet:block badges -->` when `readme.badges` is
   configured and `<!-- fleet:block license-section -->` when `readme.license`
   is configured
+- `.npmrc` in each `npm-policy` project: `# fleet:block npm-policy` when
+  `npm-policy.strict-allow-scripts` is enabled; `--adopt` never creates the
+  file
 
 Repo-owned justfile recipes and aliases must not reuse a managed recipe name
 (`install-hooks`, `npm-policy`, `audit`, `pinprick-audit`): just identifies a
