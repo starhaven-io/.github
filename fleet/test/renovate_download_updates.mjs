@@ -84,7 +84,60 @@ jobs:
       assert.equal(after.currentDigest, changesDigest ? newDigest : oldDigest);
     }
   }
-  process.stdout.write(`Renovate download updates: ${cases.length * 3} real file-update cases passed.\n`);
+  const typos = cases.find(fixture => fixture.name === 'TYPOS');
+  const config = preset.customManagers.find(manager => manager.packageNameTemplate === typos.packageName);
+  const otherDigest = 'c'.repeat(64);
+  const step = (digest, url) => `      - name: Install typos
+        env:
+          TYPOS_SHA256: "${digest}"
+        run: |
+          archive="\${RUNNER_TEMP}/typos.tar.gz"
+
+          curl --output "\${archive}" "${url}"
+`;
+  const linuxStep = step(oldDigest, typos.oldUrl);
+  const macStep = step(otherDigest, typos.oldUrl.replace('x86_64-unknown-linux-musl', 'aarch64-apple-darwin'));
+  const missingStep = step(otherDigest, 'https://example.invalid/no-typos-download');
+  for (const [name, prefix] of [
+    ['other-platform-job', `  macos:
+    runs-on: macos-latest
+    steps:
+${macStep}  lint:
+    runs-on: ubuntu-latest
+    steps:
+`],
+    ['other-platform-step', `  lint:
+    runs-on: ubuntu-latest
+    steps:
+${macStep}`],
+    ['missing-download', `  lint:
+    runs-on: ubuntu-latest
+    steps:
+${missingStep}`],
+    ['two-linux-downloads', `  lint:
+    runs-on: ubuntu-latest
+    steps:
+${step(otherDigest, typos.oldUrl)}`],
+  ]) {
+    for (const eol of ['\n', '\r\n']) {
+      const source = `name: Download tools\njobs:\n${prefix}${linuxStep}`.replaceAll('\n', eol);
+      const packageFile = `.github/workflows/typos-${name}-${eol.length}.yml`;
+      const extracted = extractPackageFile(source, packageFile, config);
+      assert.equal(extracted.deps.length, name === 'two-linux-downloads' ? 2 : 1, name);
+      const depIndex = extracted.deps.length - 1;
+      assert.equal(extracted.deps[depIndex].currentDigest, oldDigest, `${name}: bind the Linux checksum`);
+      if (depIndex) assert.equal(extracted.deps[0].currentDigest, otherDigest);
+      const updated = await doAutoReplace({
+        ...config, ...extracted, ...extracted.deps[depIndex], manager: 'regex', packageFile, depIndex,
+        autoReplaceGlobalMatch: true, newValue: typos.newTag, newDigest,
+      }, source, false);
+      const expected = source.replace(linuxStep.replaceAll('\n', eol),
+        linuxStep.replace(oldDigest, newDigest).replace(typos.oldUrl, typos.newUrl).replaceAll('\n', eol));
+      assert.equal(updated, expected, `${name}: update only the selected download`);
+      assert.ok(parse(updated).jobs.lint);
+    }
+  }
+  process.stdout.write(`Renovate download updates: ${cases.length * 3 + 8} real file-update cases passed.\n`);
 } finally {
   GlobalConfig.reset();
   await rm(localDir, { recursive: true, force: true });

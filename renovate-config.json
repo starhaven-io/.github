@@ -102,12 +102,12 @@
     },
     {
       "customType": "regex",
-      "description": "Update typos's release archive SHA-256 and the literal download URL together.",
+      "description": "Update typos's archive SHA-256 and literal URL within one conventionally indented workflow step.",
       "managerFilePatterns": [
         "/^\\.github/workflows/[^/]+\\.ya?ml$/"
       ],
       "matchStrings": [
-        "TYPOS_SHA256:\\s*\"(?<currentDigest>[a-f0-9]{64})\"(?:[\\s\\S]*?)https://github\\.com/crate-ci/typos/releases/download/(?<currentValue>v\\d+(?:\\.\\d+){2})/typos-v\\d+(?:\\.\\d+){2}-x86_64-unknown-linux-musl\\.tar\\.gz"
+        "TYPOS_SHA256:[ \\t]*\"(?<currentDigest>[a-f0-9]{64})\"[^\\r\\n]*\\r?\\n(?: {8}[^\\r\\n]*\\r?\\n|[ \\t]*\\r?\\n)*? {8}[^\\r\\n]*?https://github\\.com/crate-ci/typos/releases/download/(?<currentValue>v\\d+(?:\\.\\d+){2})/typos-v\\d+(?:\\.\\d+){2}-x86_64-unknown-linux-musl\\.tar\\.gz"
       ],
       "depNameTemplate": "typos",
       "packageNameTemplate": "crate-ci/typos",

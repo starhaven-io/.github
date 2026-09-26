@@ -120,6 +120,10 @@ keeps every ecosystem declared by each consumer's fleet-rendered
 `.github/dependabot.yml`. Do not add a manager here that duplicates one of those
 ecosystems.
 
+The typos archive manager expects the canonical two-space YAML layout, with
+step fields indented eight spaces and the checksum in step-local `env`. Keep
+its literal URL in that step so separate downloads cannot share a checksum.
+
 Consumers opt in explicitly with
 `local>starhaven-io/.github:renovate-config#<fleet-release>`. Renovate resolves
 that to this file at the repository root of the immutable CalVer tag. Preset
