@@ -1339,6 +1339,41 @@ class GuardRegressionsTest < Minitest::Test
     assert_rejects(["guard", guard(repo), "fleet guard: managed surface change rejected"])
   end
 
+  def test_rejects_npmrc_policy_overrides_outside_the_managed_block
+    settings = ["strict-allow-scripts=false", '"strict-allow-scripts"=false', "strict-allow-scripts[]=false",
+                "'strict-allow-scripts'=false", '"strict-allow-\\u0073cripts"=false']
+    settings.each_with_index do |setting, index|
+      repo = scenario("npm-policy-npmrc-override-#{index}")
+      enable_npm_policy(repo, ["site"])
+      enable_strict_allow_scripts(repo)
+      assert_sync_success(sync(repo))
+      commit_all(repo, "adopt npm-policy surfaces")
+      File.open(File.join(repo, "site/.npmrc"), "a") { |file| file.puts(setting) }
+      commit_all(repo, "override the managed npm setting")
+
+      assert_rejects(
+        ["guard", guard(repo), "site/.npmrc defines strict-allow-scripts outside fleet:block npm-policy"],
+        ["sync", sync(repo), "site/.npmrc defines strict-allow-scripts outside fleet:block npm-policy"]
+      )
+    end
+  end
+
+  def test_rejects_ini_sections_that_hide_the_managed_npm_policy
+    repo = scenario("npm-policy-npmrc-section")
+    enable_npm_policy(repo, ["site"])
+    enable_strict_allow_scripts(repo)
+    assert_sync_success(sync(repo))
+    commit_all(repo, "adopt npm-policy surfaces")
+    path = File.join(repo, "site/.npmrc")
+    File.write(path, "[hidden]\n#{File.read(path)}")
+    commit_all(repo, "move npm policy into a section")
+
+    assert_rejects(
+      ["guard", guard(repo), "site/.npmrc must not use INI sections"],
+      ["sync", sync(repo), "site/.npmrc must not use INI sections"]
+    )
+  end
+
   def test_strict_allow_scripts_requires_each_project_npmrc
     repo = scenario("npm-policy-npmrc-missing")
     enable_npm_policy(repo, ["site"])

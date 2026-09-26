@@ -178,6 +178,7 @@ class FleetSync
     validate_rendered_config_path
     assert_unique_marked_blocks(config)
     assert_unique_just_recipes(config)
+    assert_unique_npmrc_policy(config)
 
     return run_guard(config) if @guard_base
 
@@ -1048,6 +1049,41 @@ class FleetSync
     return [] unless policy.is_a?(Hash) && policy["strict-allow-scripts"] == true
 
     policy.fetch("projects").map { |project| project == "." ? ".npmrc" : "#{project}/.npmrc" }
+  end
+
+  def assert_unique_npmrc_policy(config)
+    npmrc_paths(config_params(config)).each do |relative|
+      next if @guard_base && !guard_changed_paths.include?(relative)
+
+      path = repo_path(relative)
+      next unless regular_file?(path)
+
+      local = read_path(path).sub(marker_regex("npm-policy", :hash), "")
+      local.each_line do |line|
+        next if line.lstrip.start_with?("#", ";")
+        if line.match?(/\A\s*\[[^\]]*\]\s*\z/)
+          raise FleetError, "#{relative} must not use INI sections, which can hide the managed npm policy"
+        end
+        next unless npmrc_key(line) == "strict-allow-scripts"
+
+        raise FleetError, "#{relative} defines strict-allow-scripts outside fleet:block npm-policy"
+      end
+    end
+  end
+
+  def npmrc_key(line)
+    key = line.split("=", 2).first.to_s.strip
+    if key.start_with?("'") && key.end_with?("'")
+      key = key[1...-1]
+    elsif !key.start_with?('"')
+      key = key.split(/[;#]/, 2).first.to_s.strip
+    end
+    begin
+      key = JSON.parse(key) if key.start_with?('"') && key.end_with?('"')
+    rescue JSON::ParserError
+      # npm's INI parser also retains malformed quoted keys literally.
+    end
+    key.delete_suffix("[]")
   end
 
   def managed_just_bodies(config)

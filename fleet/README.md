@@ -46,7 +46,7 @@ Tier 2 (managed blocks):
 | `local-state` | `.gitignore` | all consumers; the org-minimum header section |
 | `install-hooks` | `justfile` | all consumers |
 | `npm-policy` | `justfile` | consumers with `npm-policy`; parameterized by project directories |
-| `npm-policy` | `.npmrc` in each `npm-policy` project | consumers with `npm-policy.strict-allow-scripts: true`; makes every npm install enforce `allowScripts` |
+| `npm-policy` | `.npmrc` in each `npm-policy` project | consumers with `npm-policy.strict-allow-scripts: true`; enables `allowScripts` enforcement by default |
 | `audit` | `justfile` | all workflow-owning consumers |
 | `pinprick-audit` | `justfile` | all consumers without a cited exception |
 | `badges` + `license-section` | `README.md` | public project repos, parameterized by repo name and badge workflow |
@@ -228,7 +228,9 @@ so a local `npm install` or `npm update` bypasses the policy that CI enforces.
 `strict-allow-scripts: true` renders `strict-allow-scripts=true` into a
 `# fleet:block npm-policy` fence in the `.npmrc` beside each project's
 `package.json`, where npm reads project configuration. Settings outside the
-fence stay repo-owned, and each project must carry the fence, even in an
+fence stay repo-owned, but cannot redefine `strict-allow-scripts` or use INI
+sections that would hide the managed setting. Command-line and environment
+overrides still follow npm precedence. Each project must carry the fence, even in an
 otherwise empty `.npmrc`, before the key is enabled:
 
 ```yaml
