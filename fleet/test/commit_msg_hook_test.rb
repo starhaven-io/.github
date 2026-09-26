@@ -4,6 +4,7 @@ require "minitest/autorun"
 require "open3"
 require "tempfile"
 require "tmpdir"
+require_relative "isolated_git_env"
 
 HOOK = File.expand_path("../files/commit-msg", __dir__)
 
@@ -236,7 +237,7 @@ class CommitMsgHookTest < Minitest::Test
     Tempfile.create("commit-message") do |file|
       file.write(message)
       file.flush
-      stdout, stderr, status = Open3.capture3(env, "sh", HOOK, file.path)
+      stdout, stderr, status = Open3.capture3(ISOLATED_GIT_ENV.merge(env), "sh", HOOK, file.path)
       HookResult.new(stdout:, stderr:, status:)
     end
   end

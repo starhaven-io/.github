@@ -6,6 +6,7 @@ require "minitest/autorun"
 require "open3"
 require "tmpdir"
 require "yaml"
+require_relative "isolated_git_env"
 
 class ReleaseWorkflowTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
@@ -395,14 +396,14 @@ class ReleaseWorkflowTest < Minitest::Test
   end
 
   def git(repository, *arguments)
-    stdout, stderr, status = Open3.capture3("git", *arguments, chdir: repository)
+    stdout, stderr, status = Open3.capture3(ISOLATED_GIT_ENV, "git", *arguments, chdir: repository)
     raise "git #{arguments.join(" ")} failed:\n#{stdout}#{stderr}" unless status.success?
 
     stdout
   end
 
   def run_bash(script, cwd:, env: {})
-    Open3.capture3(env, "bash", "-e", "-u", "-o", "pipefail", "-c", script, chdir: cwd)
+    Open3.capture3(ISOLATED_GIT_ENV.merge(env), "bash", "-e", "-u", "-o", "pipefail", "-c", script, chdir: cwd)
   end
 
   def command_block(script, command)

@@ -5,8 +5,20 @@ require "fileutils"
 require "open3"
 require "tmpdir"
 require_relative "../version"
+require_relative "isolated_git_env"
 
 class FleetVersionTest < Minitest::Test
+  # FleetVersion runs git from this process, so the isolation has to apply to
+  # the process environment rather than to each spawned command.
+  def setup
+    @inherited_git_env = ENV.slice(*ISOLATED_GIT_ENV.keys)
+    ENV.update(ISOLATED_GIT_ENV)
+  end
+
+  def teardown
+    ENV.update(@inherited_git_env)
+  end
+
   def test_accepts_exact_calver_with_optional_trailing_newline
     assert_equal "v2026.09.02.1", FleetVersion.parse("v2026.09.02.1\n").text
     assert_equal "v2026.09.02.12", FleetVersion.parse("v2026.09.02.12").text

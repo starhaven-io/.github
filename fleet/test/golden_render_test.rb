@@ -7,6 +7,7 @@ require "tmpdir"
 require "yaml"
 require "minitest/autorun"
 require_relative "../version"
+require_relative "isolated_git_env"
 
 # Renders every fleet/repos/*.yml into a synthetic consumer skeleton and
 # asserts the output shape. This is the only pre-merge coverage possible for
@@ -46,7 +47,9 @@ module GoldenHelpers
   end
 
   def latest_release_tag
-    stdout, stderr, status = Open3.capture3("git", "-C", ROOT, "tag", "--merged", "HEAD", "--list", "v*")
+    stdout, stderr, status = Open3.capture3(
+      ISOLATED_GIT_ENV, "git", "-C", ROOT, "tag", "--merged", "HEAD", "--list", "v*"
+    )
     raise "could not enumerate fleet release tags: #{stderr}" unless status.success?
 
     versions = stdout.lines.filter_map do |line|
@@ -61,6 +64,7 @@ module GoldenHelpers
 
   def render(repo_root, name)
     stdout, stderr, status = Open3.capture3(
+      ISOLATED_GIT_ENV,
       "ruby", "-rpathname", File.join(ROOT, "fleet/sync.rb"),
       "--hub-root", ROOT,
       "--repo-root", repo_root,
@@ -71,6 +75,7 @@ module GoldenHelpers
 
   def check(repo_root, name)
     stdout, stderr, status = Open3.capture3(
+      ISOLATED_GIT_ENV,
       "ruby", "-rpathname", File.join(ROOT, "fleet/sync.rb"),
       "--hub-root", ROOT,
       "--repo-root", repo_root,
@@ -152,10 +157,10 @@ class GoldenRenderTest < Minitest::Test
     release_root = File.join(workspace, "hub")
     release_tag = latest_release_tag
     stdout, stderr, status = Open3.capture3(
-      "git", "clone", "--quiet", "--branch", release_tag, "--single-branch", ROOT, release_root
+      ISOLATED_GIT_ENV, "git", "clone", "--quiet", "--branch", release_tag, "--single-branch", ROOT, release_root
     )
     assert status.success?, "could not check out #{release_tag}:\n#{stdout}#{stderr}"
-    release_sha = Open3.capture2("git", "-C", release_root, "rev-parse", "HEAD").first.strip
+    release_sha = Open3.capture2(ISOLATED_GIT_ENV, "git", "-C", release_root, "rev-parse", "HEAD").first.strip
     release_repos = YAML.safe_load_file(
       File.join(release_root, "fleet/repos.yml"), permitted_classes: [], aliases: false
     ).fetch("repos")
@@ -171,7 +176,7 @@ class GoldenRenderTest < Minitest::Test
         "--repo-name", name
       ]
       tagged_arguments << "--hub" if name == ".github"
-      stdout, stderr, status = Open3.capture3(*tagged_arguments)
+      stdout, stderr, status = Open3.capture3(ISOLATED_GIT_ENV, *tagged_arguments)
       assert status.success?, "#{release_tag} could not seed #{name}:\n#{stdout}#{stderr}"
 
       arguments = [
@@ -184,7 +189,7 @@ class GoldenRenderTest < Minitest::Test
         "--main-ref", release_sha
       ]
       arguments << "--hub" if name == ".github"
-      stdout, stderr, status = Open3.capture3(*arguments)
+      stdout, stderr, status = Open3.capture3(ISOLATED_GIT_ENV, *arguments)
 
       assert status.success?, "current renderer cannot preflight #{release_tag} for #{name}:\n#{stdout}#{stderr}"
     end

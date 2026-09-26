@@ -5,6 +5,7 @@ require "open3"
 require "tmpdir"
 require "yaml"
 require "minitest/autorun"
+require_relative "isolated_git_env"
 
 module FleetSyncWorkflowHelpers
   ROOT = File.expand_path("../..", __dir__)
@@ -24,7 +25,7 @@ module FleetSyncWorkflowHelpers
   module_function
 
   def git(repo, *args)
-    stdout, stderr, status = Open3.capture3("git", *args, chdir: repo)
+    stdout, stderr, status = Open3.capture3(ISOLATED_GIT_ENV, "git", *args, chdir: repo)
     raise "git #{args.join(" ")} failed:\n#{stdout}#{stderr}" unless status.success?
 
     stdout
@@ -158,6 +159,7 @@ class FleetSyncWorkflowTest < Minitest::Test
   def run_publishability_check(repo, path)
     File.binwrite(File.join(File.dirname(repo), "changed-files.nul"), "#{path}\0")
     stdout, stderr, status = Open3.capture3(
+      ISOLATED_GIT_ENV,
       "bash", "-euo", "pipefail", "-c", publishability_script,
       chdir: repo
     )

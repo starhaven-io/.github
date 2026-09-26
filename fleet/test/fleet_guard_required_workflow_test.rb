@@ -6,6 +6,7 @@ require "open3"
 require "tmpdir"
 require "yaml"
 require "minitest/autorun"
+require_relative "isolated_git_env"
 
 module RequiredGuardWorkflow
   ROOT = File.expand_path("../..", __dir__)
@@ -17,7 +18,7 @@ module RequiredGuardWorkflow
   module_function
 
   def git(repo, *args)
-    stdout, stderr, status = Open3.capture3("git", *args, chdir: repo)
+    stdout, stderr, status = Open3.capture3(ISOLATED_GIT_ENV, "git", *args, chdir: repo)
     raise "git #{args.join(" ")} failed:\n#{stdout}#{stderr}" unless status.success?
 
     stdout
@@ -49,7 +50,7 @@ module RequiredGuardWorkflow
       git(repo, "-c", "user.name=Required Guard Test", "-c", "user.email=guard@example.invalid",
           "-c", "tag.gpgSign=false", "tag", "-a", version, "-m", "Fleet #{version}")
       _stdout, stderr, status = Open3.capture3(
-        { "GITHUB_REPOSITORY" => nil },
+        ISOLATED_GIT_ENV.merge("GITHUB_REPOSITORY" => nil),
         "ruby", "fleet/sync.rb", "--hub-root", ".", "--repo-root", ".", "--repo-name", ".github",
         chdir: repo
       )
@@ -336,7 +337,7 @@ class FleetGuardRequiredWorkflowTest < Minitest::Test
     base = git(repo, "rev-parse", "HEAD").strip
     git(repo, "switch", "-q", "-c", sync_branch(repo))
     _stdout, stderr, status = Open3.capture3(
-      { "GITHUB_REPOSITORY" => nil },
+      ISOLATED_GIT_ENV.merge("GITHUB_REPOSITORY" => nil),
       "ruby", "hub/fleet/sync.rb", "--hub-root", "hub", "--repo-root", ".", "--repo-name", ".github",
       chdir: repo
     )
@@ -356,13 +357,13 @@ class FleetGuardRequiredWorkflowTest < Minitest::Test
 
   def verify_sync(repo, base:, head:, branch: sync_branch(repo))
     stdout, stderr, status = Open3.capture3(
-      {
+      ISOLATED_GIT_ENV.merge(
         "BASE_SHA" => base,
         "HEAD_REF" => branch,
         "HEAD_SHA" => head,
         "REPO_NAME" => ".github",
         "GITHUB_REPOSITORY" => nil
-      },
+      ),
       "bash", "-euo", "pipefail", "-c", step("Verify fleet sync pull request").fetch("run"),
       chdir: repo
     )
@@ -383,11 +384,11 @@ class FleetGuardRequiredWorkflowTest < Minitest::Test
   def guard(repo, base_sha: nil, repository: "starhaven-io/.github")
     base_sha ||= git(repo, "rev-parse", "origin/main").strip
     stdout, stderr, status = Open3.capture3(
-      {
+      ISOLATED_GIT_ENV.merge(
         "BASE_SHA" => base_sha,
         "GITHUB_REPOSITORY" => repository,
         "REPO_NAME" => ".github"
-      },
+      ),
       "bash", "-euo", "pipefail", "-c", step("Guard fleet-managed surfaces").fetch("run"),
       chdir: repo
     )
