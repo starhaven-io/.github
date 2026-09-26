@@ -107,7 +107,7 @@
         "/^\\.github/workflows/[^/]+\\.ya?ml$/"
       ],
       "matchStrings": [
-        "TYPOS_SHA256:[ \\t]*\"(?<currentDigest>[a-f0-9]{64})\"[^\\r\\n]*\\r?\\n(?: {8}[^\\r\\n]*\\r?\\n|[ \\t]*\\r?\\n)*? {8}[^\\r\\n]*?https://github\\.com/crate-ci/typos/releases/download/(?<currentValue>v\\d+(?:\\.\\d+){2})/typos-v\\d+(?:\\.\\d+){2}-x86_64-unknown-linux-musl\\.tar\\.gz"
+        "(?:^|\\r?\\n)          TYPOS_SHA256:[ \\t]*\"(?<currentDigest>[a-f0-9]{64})\"[ \\t]*(?:#[^\\r\\n]*)?\\r?\\n        run:[ \\t]*\\|[-+]?[ \\t]*(?:#[^\\r\\n]*)?\\r?\\n(?: {10}[^\\r\\n]*\\r?\\n|[ \\t]*\\r?\\n)*? {10}[^\\r\\n]*?https://github\\.com/crate-ci/typos/releases/download/(?<currentValue>v\\d+(?:\\.\\d+){2})/typos-v\\d+(?:\\.\\d+){2}-x86_64-unknown-linux-musl\\.tar\\.gz"
       ],
       "depNameTemplate": "typos",
       "packageNameTemplate": "crate-ci/typos",

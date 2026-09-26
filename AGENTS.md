@@ -121,8 +121,9 @@ keeps every ecosystem declared by each consumer's fleet-rendered
 ecosystems.
 
 The typos archive manager expects the canonical two-space YAML layout, with
-step fields indented eight spaces and the checksum in step-local `env`. Keep
-its literal URL in that step so separate downloads cannot share a checksum.
+step fields indented eight spaces and `TYPOS_SHA256` last in step-local `env`,
+immediately before `run: |`. Keep its literal URL in that step so separate
+downloads cannot share a checksum.
 
 Consumers opt in explicitly with
 `local>starhaven-io/.github:renovate-config#<fleet-release>`. Renovate resolves

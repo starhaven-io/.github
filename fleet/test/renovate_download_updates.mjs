@@ -137,6 +137,10 @@ ${step(otherDigest, typos.oldUrl)}`],
       assert.ok(parse(updated).jobs.lint);
     }
   }
+  const noncanonical = `name: Download tools\njobs:\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n${linuxStep}`
+    .replaceAll('\n      ', '\n        ');
+  assert.equal(extractPackageFile(noncanonical, '.github/workflows/other-indent.yml', config), null,
+    'unsupported indentation must not fall back to an unbounded match');
   process.stdout.write(`Renovate download updates: ${cases.length * 3 + 8} real file-update cases passed.\n`);
 } finally {
   GlobalConfig.reset();
