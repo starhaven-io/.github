@@ -24,6 +24,7 @@ params:
           reason: "TypeScript 7.0 lacks Astro's required API; reassess with 7.1: https://github.com/withastro/astro/issues/17268"
           versions: [">=7.0.0 <7.1.0"]
   npm-policy:
+    strict-allow-scripts: true
     projects: ["site"]
   link-check:
     targets: "README.md AGENTS.md CLAUDE.md DATA_SOURCES.md SECURITY.md CONTRIBUTING.md CODE_OF_CONDUCT.md seed/README.md docs/**/*.md"
