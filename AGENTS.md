@@ -71,6 +71,8 @@ Top level:
 `fleet/` (the renderer and its canon):
 
 - `sync.rb`: renderer, drift checker, and PR guard in one stdlib-only file.
+- `sync_pr_check.rb`: verifies that a sync-bot `fleet-sync-*` pull request
+  equals the authenticated release render of its merge base.
 - `repos.yml` and `repos/<name>.yml`: consumer registry and per-repo config.
 - `files/`, `blocks/`, `templates/`: tier-1 whole files, tier-2 fenced block
   content, and tier-3 ERB templates.
@@ -93,7 +95,8 @@ Top level:
 - `dco-required.yml`: run from `@main` by the org DCO ruleset against every
   pull request; validates sign-offs independently of the pull-request tree.
 - `fleet-guard-required.yml`: run from `@main` by an org ruleset against
-  consumer PRs; skips the hub itself.
+  consumer PRs; skips the hub itself, exempts only Dependabot, and requires
+  sync-bot `fleet-sync-*` PRs to match the authenticated release render.
 - `fleet-sync.yml`: runs from trusted `main`, authenticates and executes the
   tagged renderer and canon, and opens verified sync PRs using App credentials
   (weekly cron or repository dispatch). Hub retries use the captured `main`
