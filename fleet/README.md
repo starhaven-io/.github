@@ -112,8 +112,9 @@ The released audit enables repository config only for macOSdb, whose two Apple
 archive downloads are reviewed in `fleet/repos/macOSdb.yml`. All other
 consumers retain `no-repo-config: true`; callers have no policy opt-in input.
 The required trusted-main guard rejects consumer edits, additions, deletions,
-and mode changes to the managed policy. As elsewhere in fleet delivery, the
-guard trusts Starhaven Bot and Dependabot writers. Introduce guard enforcement
+and mode changes to the managed policy. It exempts Dependabot writers and
+accepts Starhaven Bot changes only in fleet-sync pull requests that match the
+authenticated release render. Introduce guard enforcement
 first, then release the engine and wrapper, then release/sync the policy and
 audit pin together. A successful local audit is not evidence that this hosted
 sequence has completed.
@@ -557,9 +558,9 @@ request that creates or changes `.fleet.yml`, then looks for PR changes to tier
 markers. If none changed, it exits silently. If managed surfaces changed, it
 runs the renderer in check mode against the PR tree using the hub config pinned
 by the base branch's guard caller. Direct edits to managed files or blocks fail
-with the exact `fleet/repos/<name>.yml` path to change in this hub. Sync-bot and
-Dependabot PRs are exempt, and the job always reports a conclusion so the check
-can be required.
+with the exact `fleet/repos/<name>.yml` path to change in this hub. This
+in-tree check exempts sync-bot and Dependabot PRs, and the job always reports a
+conclusion so the check can be required.
 
 First-party reusable workflow calls inside Tier 4 workflows are monotonic for
 consumer PRs: canonical calls may be introduced, but a consumer PR cannot reduce
@@ -602,6 +603,18 @@ adversarial control for edits to its own caller workflow, because a
 tamper-resistant enforcement need an org ruleset or required workflow sourced
 from a trusted ref.
 
+The organization-required `fleet-guard-required.yml` runs the guard from hub
+`main` and exempts only Dependabot. A pull request that Starhaven Bot authors
+from a same-repository `fleet-sync-<version>` branch is checked as a sync
+delivery instead: `<version>` must be the release that hub `main` names and
+authenticates, and the head tree must equal, path for path and mode for mode,
+what the current-main preflight and that release's renderer produce from the
+pull request's merge base. Every other pull request, including a bot commit
+pushed onto another branch, faces the normal guard. A compromised sync App can
+therefore deliver only released canon through sync branches. Repository-owned
+content in other bot pull requests still depends on each repository's merge
+policy.
+
 ## Security Posture
 
 - Hub branch, tag, environment, and required-check rules are external
@@ -618,6 +631,10 @@ from a trusted ref.
   repository-scoped App tokens. Consumer changes still arrive through signed
   commits and required-check-gated PRs, but a compromised hub workflow must not
   be treated as contained by SHA pins alone.
+- Sync-delivery containment is anchored on hub `main`: the required guard
+  trusts only the release that hub `main` authenticates. That anchor holds
+  against a compromised sync App only while merging into hub `main` requires an
+  approval the App cannot supply.
 - The org Actions policy implicitly allows same-org actions and reusable
   workflows; the explicit allowlist is reserved for third-party trust grants.
 - The org-ruleset required workflows (`dco-required.yml` and

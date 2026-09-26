@@ -49,6 +49,7 @@ jobs:
           ruby -c fleet/sync.rb
           ruby -c fleet/version.rb
           ruby -c fleet/pr_identity.rb
+          ruby -c fleet/sync_pr_check.rb
           ruby -rerb -ryaml -e '
             Dir["fleet/templates/*.erb"].each do |template|
               ERB.new(File.read(template, encoding: "UTF-8"), trim_mode: "-")

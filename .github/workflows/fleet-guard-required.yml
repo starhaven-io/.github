@@ -28,26 +28,34 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Check actor exemption
-        id: exemption
+      # The sync App gets no exemption: its fleet-sync PRs must match the
+      # authenticated release render exactly, and its other PRs face the guard.
+      - name: Select guard mode
+        id: mode
         env:
           ACTOR: ${{ github.actor }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
-          if [[ "${ACTOR}" == "starhaven-bot[bot]" || "${ACTOR}" == "dependabot[bot]" ]]; then
-            echo "exempt=true" >> "${GITHUB_OUTPUT}"
+          if [[ "${AUTHOR}" == "starhaven-bot[bot]" && "${HEAD_REF}" == fleet-sync-* &&
+            "${HEAD_REPOSITORY}" == "${GITHUB_REPOSITORY}" ]]; then
+            echo "mode=sync" >> "${GITHUB_OUTPUT}"
+          elif [[ "${ACTOR}" == "dependabot[bot]" ]]; then
+            echo "mode=exempt" >> "${GITHUB_OUTPUT}"
           else
-            echo "exempt=false" >> "${GITHUB_OUTPUT}"
+            echo "mode=guard" >> "${GITHUB_OUTPUT}"
           fi
 
       - name: Checkout consumer
-        if: steps.exemption.outputs.exempt != 'true'
+        if: steps.mode.outputs.mode != 'exempt'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Checkout fleet hub
-        if: steps.exemption.outputs.exempt != 'true'
+        if: steps.mode.outputs.mode != 'exempt'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: starhaven-io/.github
@@ -60,13 +68,13 @@ jobs:
           persist-credentials: false
 
       - name: Set up Ruby
-        if: steps.exemption.outputs.exempt != 'true'
+        if: steps.mode.outputs.mode != 'exempt'
         uses: ruby/setup-ruby@762794c140bbeda0f1224786aa33b4b46783a6c1 # v1.326.0
         with:
           working-directory: hub/fleet
 
       - name: Guard fleet-managed surfaces
-        if: steps.exemption.outputs.exempt != 'true'
+        if: steps.mode.outputs.mode == 'guard'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           REPO_NAME: ${{ github.event.repository.name }}
@@ -76,3 +84,14 @@ jobs:
             exit 1
           fi
           ruby hub/fleet/sync.rb --hub-root hub --repo-root . --repo-name "${REPO_NAME}" --guard "${BASE_SHA}"
+
+      - name: Verify fleet sync pull request
+        if: steps.mode.outputs.mode == 'sync'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          ruby hub/fleet/sync_pr_check.rb --hub-root hub --repo-root . --repo-name "${REPO_NAME}" \
+            --base "${BASE_SHA}" --head "${HEAD_SHA}" --branch "${HEAD_REF}"
