@@ -116,17 +116,28 @@ thin callers: `reusable-codeql.yml`, `reusable-conventional-commits.yml`,
 
 `renovate-config.json` is the estate's shared Renovate policy for tool pins that
 no Dependabot ecosystem owns: `.ruby-version`, the `rust-toolchain` channel,
-and `custom.regex` matches for `cargo install` pins, the Vale, lychee, and
-typos release/SHA-256 pairs, `TOFU_VERSION`, and the version/digest pair in
-`ZIZMOR_IMAGE`. Dependabot
+and `custom.regex` matches for `cargo install` pins, the Vale, lychee, typos,
+cargo-deny, cargo-nextest, and cargo-llvm-cov release/SHA-256 pairs,
+`TOFU_VERSION`, and the version/digest pair in `ZIZMOR_IMAGE`. Dependabot
 keeps every ecosystem declared by each consumer's fleet-rendered
 `.github/dependabot.yml`. Do not add a manager here that duplicates one of those
 ecosystems.
 
-The typos archive manager expects the canonical two-space YAML layout, with
-step fields indented eight spaces and `TYPOS_SHA256` last in step-local `env`,
-immediately before `run: |`. Keep its literal URL in that step so separate
-downloads cannot share a checksum.
+The typos and Cargo tool archive managers expect the canonical two-space YAML
+layout, with step fields indented eight spaces and the tool-specific
+`*_SHA256` last in step-local `env`, immediately before `run: |`. Keep each
+literal URL in that step so separate downloads cannot share a checksum. These
+managers cover the x86-64 Linux musl archives; add explicit platform coverage
+before using another archive.
+
+cargo-deny uses a custom datasource that selects the exact Linux archive's
+GitHub API digest and publication timestamp. Its upstream checksum sidecars
+contain only a hash; the locked release-attachments datasource can hash that
+sidecar instead of the archive when updating. Preserve the exact asset match,
+required SHA-256 and timestamp, and exclusion of draft/prerelease releases.
+Checksum-only updates are disabled for this datasource: a changed archive under
+an existing version requires investigation, and the original release timestamp
+cannot establish the replacement archive's age.
 
 Consumers opt in explicitly with
 `local>starhaven-io/.github:renovate-config#<fleet-release>`. Renovate resolves
