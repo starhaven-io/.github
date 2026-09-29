@@ -17,6 +17,18 @@
   "minimumReleaseAge": "7 days",
   "minimumReleaseAgeBehaviour": "timestamp-required",
   "internalChecksFilter": "strict",
+  "packageRules": [
+    {
+      "description": "Require manual investigation when cargo-deny replaces an archive without a new release version.",
+      "matchDatasources": [
+        "custom.cargo-deny-linux"
+      ],
+      "matchUpdateTypes": [
+        "digest"
+      ],
+      "enabled": false
+    }
+  ],
   "semanticCommits": "enabled",
   "semanticCommitType": "chore",
   "semanticCommitScope": "deps",
@@ -117,6 +129,51 @@
     },
     {
       "customType": "regex",
+      "description": "Update cargo-deny's Linux archive SHA-256 and literal URL within one conventionally indented workflow step.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "(?:^|\\r?\\n)          CARGO_DENY_SHA256:[ \\t]*\"(?<currentDigest>[a-f0-9]{64})\"[ \\t]*(?:#[^\\r\\n]*)?\\r?\\n        run:[ \\t]*\\|[-+]?[ \\t]*(?:#[^\\r\\n]*)?\\r?\\n(?: {10}[^\\r\\n]*\\r?\\n|[ \\t]*\\r?\\n)*? {10}[^\\r\\n]*?https://github\\.com/EmbarkStudios/cargo-deny/releases/download/(?<currentValue>\\d+(?:\\.\\d+){2})/cargo-deny-\\d+(?:\\.\\d+){2}-x86_64-unknown-linux-musl\\.tar\\.gz"
+      ],
+      "depNameTemplate": "cargo-deny",
+      "packageNameTemplate": "EmbarkStudios/cargo-deny",
+      "datasourceTemplate": "custom.cargo-deny-linux",
+      "versioningTemplate": "semver",
+      "autoReplaceStringTemplate": "{{#if newDigest}}{{{replace currentDigest newDigest (replace 'https://github[.]com/EmbarkStudios/cargo-deny/releases/download/.*$' '' replaceString)}}}{{else}}{{{replace 'https://github[.]com/EmbarkStudios/cargo-deny/releases/download/.*$' '' replaceString}}}{{/if}}https://github.com/EmbarkStudios/cargo-deny/releases/download/{{{newValue}}}/cargo-deny-{{{newValue}}}-x86_64-unknown-linux-musl.tar.gz"
+    },
+    {
+      "customType": "regex",
+      "description": "Update cargo-nextest's Linux archive SHA-256 and literal URL within one conventionally indented workflow step.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "(?:^|\\r?\\n)          CARGO_NEXTEST_SHA256:[ \\t]*\"(?<currentDigest>[a-f0-9]{64})\"[ \\t]*(?:#[^\\r\\n]*)?\\r?\\n        run:[ \\t]*\\|[-+]?[ \\t]*(?:#[^\\r\\n]*)?\\r?\\n(?: {10}[^\\r\\n]*\\r?\\n|[ \\t]*\\r?\\n)*? {10}[^\\r\\n]*?https://github\\.com/nextest-rs/nextest/releases/download/(?<currentValue>cargo-nextest-\\d+(?:\\.\\d+){2})/cargo-nextest-\\d+(?:\\.\\d+){2}-x86_64-unknown-linux-musl\\.tar\\.gz"
+      ],
+      "depNameTemplate": "cargo-nextest",
+      "packageNameTemplate": "nextest-rs/nextest",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "regex:^cargo-nextest-(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$",
+      "autoReplaceStringTemplate": "{{#if newDigest}}{{{replace currentDigest newDigest (replace 'https://github[.]com/nextest-rs/nextest/releases/download/.*$' '' replaceString)}}}{{else}}{{{replace 'https://github[.]com/nextest-rs/nextest/releases/download/.*$' '' replaceString}}}{{/if}}https://github.com/nextest-rs/nextest/releases/download/{{{newValue}}}/{{{newValue}}}-x86_64-unknown-linux-musl.tar.gz"
+    },
+    {
+      "customType": "regex",
+      "description": "Update cargo-llvm-cov's Linux archive SHA-256 and literal URL within one conventionally indented workflow step.",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "(?:^|\\r?\\n)          CARGO_LLVM_COV_SHA256:[ \\t]*\"(?<currentDigest>[a-f0-9]{64})\"[ \\t]*(?:#[^\\r\\n]*)?\\r?\\n        run:[ \\t]*\\|[-+]?[ \\t]*(?:#[^\\r\\n]*)?\\r?\\n(?: {10}[^\\r\\n]*\\r?\\n|[ \\t]*\\r?\\n)*? {10}[^\\r\\n]*?https://github\\.com/taiki-e/cargo-llvm-cov/releases/download/(?<currentValue>v\\d+(?:\\.\\d+){2})/cargo-llvm-cov-x86_64-unknown-linux-musl\\.tar\\.gz"
+      ],
+      "depNameTemplate": "cargo-llvm-cov",
+      "packageNameTemplate": "taiki-e/cargo-llvm-cov",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver",
+      "autoReplaceStringTemplate": "{{#if newDigest}}{{{replace currentDigest newDigest (replace 'https://github[.]com/taiki-e/cargo-llvm-cov/releases/download/.*$' '' replaceString)}}}{{else}}{{{replace 'https://github[.]com/taiki-e/cargo-llvm-cov/releases/download/.*$' '' replaceString}}}{{/if}}https://github.com/taiki-e/cargo-llvm-cov/releases/download/{{{newValue}}}/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz"
+    },
+    {
+      "customType": "regex",
       "description": "Update the strict workflow audit container version and digest together.",
       "managerFilePatterns": [
         "/^\\.github/workflows/[^/]+\\.ya?ml$/"
@@ -127,5 +184,14 @@
       "datasourceTemplate": "docker",
       "versioningTemplate": "docker"
     }
-  ]
+  ],
+  "customDatasources": {
+    "cargo-deny-linux": {
+      "defaultRegistryUrlTemplate": "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases?per_page=100",
+      "format": "json",
+      "transformTemplates": [
+        "{\"releases\": [$[draft = false and prerelease = false].($release := $; $archive := assets[name = 'cargo-deny-' & $release.tag_name & '-x86_64-unknown-linux-musl.tar.gz']; $count($archive) = 1 and $archive.state = 'uploaded' and $type($archive.digest) = 'string' and $type(published_at) = 'string' ? ($exists($match(tag_name, /^[0-9]+\\.[0-9]+\\.[0-9]+$/)) and $exists($match($archive.digest, /^sha256:[a-f0-9]{64}$/)) ? {\"version\": tag_name, \"releaseTimestamp\": published_at, \"digest\": $substringAfter($archive.digest, 'sha256:'), \"changelogUrl\": html_url}))], \"sourceUrl\": \"https://github.com/EmbarkStudios/cargo-deny\"}"
+      ]
+    }
+  }
 }
