@@ -17,6 +17,10 @@ params:
     - package-ecosystem: "github-actions"
       group: "github-actions"
       directory: "/"
+      ignore:
+        - dependency-name: "actions/setup-node"
+          reason: "pinprick's source scan does not yet cover setup-node v7; reassess when it does"
+          versions: [">=7.0.0"]
   link-check:
     targets: "--config lychee.toml README.md profile/README.md CONTRIBUTING.md SECURITY.md"
     build-site: false
