@@ -960,6 +960,48 @@ class GuardRegressionsTest < Minitest::Test
     end
   end
 
+  ACTION_ACCEPTANCE = {
+    "action" => "Homebrew/actions/setup-homebrew",
+    "path" => "setup-homebrew/main.sh",
+    "category" => "shell_fetch",
+    "severity" => "high",
+    "description" => "shell executing fetched content via command substitution — bypasses pinning",
+    "command" => 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://example.invalid/install.sh)"',
+    "reason" => "installs from an unversioned upstream by design"
+  }.freeze
+
+  def test_renders_action_acceptances_as_hub_owned_policy
+    repo = scenario("audit-policy-action-acceptance")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("pinprick-audit")["accept-action-findings"] = [ACTION_ACCEPTANCE]
+    write_fleet_config(repo, config)
+    assert_sync_success(sync(repo))
+
+    policy = File.read(File.join(repo, ".pinprick.toml"))
+    assert_includes policy, "accept-workflow-findings = []\n"
+    assert_includes policy, "[[accept-action-findings]]\naction = \"Homebrew/actions/setup-homebrew\"\n" \
+                            "path = \"setup-homebrew/main.sh\"\n"
+    assert_includes policy, "command = #{JSON.generate(ACTION_ACCEPTANCE.fetch("command"))}\n"
+
+    commit_all(repo, "adopt action acceptance")
+    File.write(File.join(repo, ".pinprick.toml"), policy.sub("setup-homebrew/main.sh", "setup-homebrew/post.sh"))
+    commit_all(repo, "retarget action acceptance")
+    assert_rejects(["content", consumer_guard(repo), ".pinprick.toml is hub-owned audit policy"])
+  end
+
+  def test_rejects_broad_or_invalid_action_acceptances
+    [{ "action" => "Homebrew" }, { "action" => "Homebrew/*" }, { "action" => "Homebrew/actions/../brew" },
+     { "path" => "setup-homebrew/*.sh" }, { "path" => "../main.sh" }, { "reason" => " " },
+     { "severity" => "all" }, { "ignore" => "shell_fetch" }].each_with_index do |change, index|
+      repo = scenario("invalid-action-acceptance-#{index}")
+      config = fleet_config(repo)
+      config.fetch("params").fetch("pinprick-audit")["accept-action-findings"] = [ACTION_ACCEPTANCE.merge(change)]
+      write_fleet_config(repo, config)
+
+      assert_rejects(["invalid acceptance", sync(repo), "accept-action-findings"])
+    end
+  end
+
   def test_allows_hub_fleet_config_edit
     repo = scenario("hub-config-edit")
     config = fleet_config(repo)

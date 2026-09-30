@@ -28,11 +28,12 @@ jobs:
           persist-credentials: false
 
       - name: Run pinprick
-        uses: starhaven-io/pinprick-action@476d59b8aec3b92bdbfa836ae4449e656881eb4b # v0.6.6
+        uses: starhaven-io/pinprick-action@c97704c6d51181f640c10ee30caf044e9038d976 # v0.6.7
         with:
           # Fork pull requests cannot upload SARIF with the read-only token.
           advanced-security: ${{ inputs.advanced-security }}
           fail-on-findings: ${{ inputs.fail-on-findings }}
-          # macOSdb's complete config is fleet-owned and protected by the
-          # required trusted-main guard, including policy additions/removals.
-          no-repo-config: ${{ github.repository != 'starhaven-io/macOSdb' }}
+          # Only these consumers' complete configs are fleet-owned and protected
+          # by the required trusted-main guard, including policy additions and
+          # removals.
+          no-repo-config: ${{ !contains(fromJSON('["starhaven-io/Brewy","starhaven-io/homebrew-tap","starhaven-io/macOSdb","starhaven-io/pkgstory"]'), github.repository) }}

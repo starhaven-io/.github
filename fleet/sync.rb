@@ -734,9 +734,12 @@ class FleetSync
 
     reject_unknown_keys(value,
                         %w[advanced-security fail-on-findings pull-request push-paths timeout-minutes
-                           accept-workflow-findings], path)
+                           accept-workflow-findings accept-action-findings], path)
     if value.key?("accept-workflow-findings")
       validate_workflow_acceptances(value.fetch("accept-workflow-findings"), "#{path}.accept-workflow-findings")
+    end
+    if value.key?("accept-action-findings")
+      validate_action_acceptances(value.fetch("accept-action-findings"), "#{path}.accept-action-findings")
     end
     if value.key?("advanced-security")
       validate_advanced_security(value["advanced-security"], "#{path}.advanced-security")
@@ -767,6 +770,36 @@ class FleetSync
         raise FleetError, "#{item_path}.severity must be low, medium, or high"
       end
     end
+  end
+
+  # pinprick matches an accepted action finding by the action's exact
+  # owner/repo[/subpath] and the file's path in that repository.
+  def validate_action_acceptances(entries, path)
+    raise FleetError, "#{path} must be an array" unless entries.is_a?(Array)
+
+    fields = %w[action path category severity description command reason]
+    entries.each_with_index do |entry, index|
+      item_path = "#{path}[#{index}]"
+      raise FleetError, "#{item_path} must be a mapping" unless entry.is_a?(Hash)
+
+      reject_unknown_keys(entry, fields, item_path)
+      fields.each { |field| validate_plain_string(entry[field], "#{item_path}.#{field}") }
+      unless entry.fetch("action").match?(%r{\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\z}) &&
+             literal_segments?(entry.fetch("action"))
+        raise FleetError, "#{item_path}.action must name one owner/repo[/subpath] action"
+      end
+      unless entry.fetch("path").match?(%r{\A[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\z}) &&
+             literal_segments?(entry.fetch("path"))
+        raise FleetError, "#{item_path}.path must be one literal file path in the action repository"
+      end
+      unless %w[low medium high].include?(entry.fetch("severity"))
+        raise FleetError, "#{item_path}.severity must be low, medium, or high"
+      end
+    end
+  end
+
+  def literal_segments?(value)
+    !value.split("/").intersect?(%w[. ..])
   end
 
   def validate_zizmor(value)
@@ -1117,8 +1150,10 @@ class FleetSync
     render_zizmor(params.fetch("zizmor", {})) unless exception?(config, "zizmor")
     render_pinprick_audit(params.fetch("pinprick-audit", {})) unless exception?(config, "pinprick-audit")
     if managed_pinprick_config?(config)
-      entries = params.fetch("pinprick-audit").fetch("accept-workflow-findings")
-      write_file(".pinprick.toml", render_template("pinprick.toml.erb", entries:), ".pinprick.toml")
+      policy = params.fetch("pinprick-audit")
+      entries = policy.fetch("accept-workflow-findings", [])
+      action_entries = policy.fetch("accept-action-findings", [])
+      write_file(".pinprick.toml", render_template("pinprick.toml.erb", entries:, action_entries:), ".pinprick.toml")
     end
     render_link_check(params.fetch("link-check")) if params["link-check"]
     render_codeql(params.fetch("codeql", {})) unless exception?(config, "codeql")
@@ -1335,7 +1370,10 @@ class FleetSync
   end
 
   def managed_pinprick_config?(config)
-    config && config_params(config).fetch("pinprick-audit", {}).key?("accept-workflow-findings")
+    return false unless config
+
+    policy = config_params(config).fetch("pinprick-audit", {})
+    policy.key?("accept-workflow-findings") || policy.key?("accept-action-findings")
   end
 
   def reject_consumer_pinprick_config_edit(config)
