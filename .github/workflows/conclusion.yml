@@ -77,7 +77,7 @@ jobs:
     name: Fleet guard
     permissions:
       contents: read
-    uses: starhaven-io/.github/.github/workflows/reusable-fleet-guard.yml@85b63590380becacd87cf3cccf8c2d6ea8146fad # v2026.09.28.1
+    uses: starhaven-io/.github/.github/workflows/reusable-fleet-guard.yml@2e730ee55e49d6c7295818a25fde6aabc8c1493f # v2026.09.29.1
     with:
       repo-name: ${{ github.event.repository.name }}
 
@@ -103,7 +103,7 @@ jobs:
     permissions:
       contents: read
       security-events: write # required for pinprick SARIF upload on same-repository changes
-    uses: starhaven-io/.github/.github/workflows/reusable-pinprick-audit.yml@85b63590380becacd87cf3cccf8c2d6ea8146fad # v2026.09.28.1
+    uses: starhaven-io/.github/.github/workflows/reusable-pinprick-audit.yml@2e730ee55e49d6c7295818a25fde6aabc8c1493f # v2026.09.29.1
     with:
       advanced-security: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
       fail-on-findings: true
