@@ -11,3 +11,10 @@ accept-workflow-findings = []
 <% end -%>
 <% end -%>
 <% end -%>
+<% action_entries.each do |entry| -%>
+
+[[accept-action-findings]]
+<% entry.each do |key, value| -%>
+<%= key %> = <%= JSON.generate(value) %>
+<% end -%>
+<% end -%>

@@ -58,7 +58,7 @@ Tier 3 (rendered files and thin callers):
 | `.fleet.yml` | rendered copy of `fleet/repos/<name>.yml` | complete effective fleet config, kept consumer-side for discoverability and guard base-state classification |
 | `.github/dependabot.yml` | rendered file | ecosystems, directories, and dependency policies |
 | `renovate.json` | rendered file | explicit shared-preset reference pinned to the current immutable fleet release; consumers with `renovate: true` |
-| `.pinprick.toml` | rendered audit policy | exact `pinprick-audit.accept-workflow-findings` decisions; the complete file is hub-owned |
+| `.pinprick.toml` | rendered audit policy | exact `pinprick-audit.accept-workflow-findings` and `pinprick-audit.accept-action-findings` decisions; the complete file is hub-owned |
 | `.github/workflows/zizmor.yml` | caller of `reusable-zizmor.yml` | extra push paths, optional PR paths, SARIF or direct gate, schedule, timeout |
 | `.github/workflows/pinprick-audit.yml` | caller of `reusable-pinprick-audit.yml` | `advanced-security` (false also drops the `security-events` grant), `fail-on-findings`, optional pull-request trigger, timeout |
 | `.github/workflows/link-check.yml` | caller of `reusable-link-check.yml` | targets, `build-site`, site directory, schedule |
@@ -108,9 +108,23 @@ findings explicitly, and any workflow byte change requires renewed review in
 canon. Keep the key with an empty array when retiring the last entry so the
 configuration remains managed while older releases can still load it.
 
-The released audit enables repository config only for macOSdb, whose two Apple
-archive downloads are reviewed in `fleet/repos/macOSdb.yml`. All other
-consumers retain `no-repo-config: true`; callers have no policy opt-in input.
+### Accepted action findings
+
+`params.pinprick-audit.accept-action-findings` accepts one reviewed finding in
+a third-party action's source. Each entry names the action's
+`owner/repo[/subpath]`, the file's path in that repository, category,
+severity, description, command, and review reason. It applies at any revision
+of the action and at most once per revision, so the action is still scanned
+and any other or repeated finding still fails. It needs pinprick 0.27.0:
+earlier engines cannot parse the key and fall back to default configuration,
+so deliver it in the same release as an audit pin that runs 0.27.0 or later.
+Declaring either key makes the complete `.pinprick.toml` hub-owned.
+
+The released audit enables repository config only for the consumers whose
+policy is fleet-owned: Brewy, homebrew-tap, macOSdb, and pkgstory.
+`pinprick_policy_test.rb` keeps that list equal to the configurations that
+declare policy. All other consumers retain `no-repo-config: true`; callers have
+no policy opt-in input.
 The required trusted-main guard rejects consumer edits, additions, deletions,
 and mode changes to the managed policy. It exempts Dependabot writers and
 accepts Starhaven Bot changes only in fleet-sync pull requests that match the
