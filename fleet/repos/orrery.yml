@@ -10,6 +10,10 @@ params:
     - package-ecosystem: "opentofu"
       group: "opentofu"
       directories: ["/", "/modules/*"]
+      ignore:
+        - dependency-name: "cloudflare/cloudflare"
+          reason: "5.26.0 plans include_shadow_metadata on every DNS record and the apply fails; reassess with the next release: https://github.com/cloudflare/terraform-provider-cloudflare/issues/7387"
+          versions: ["5.26.0"]
   zizmor:
     advanced-security: false
     pull-request-paths: [".github/workflows/**"]
