@@ -59,8 +59,8 @@ Top level:
   the Dependabot-managed ecosystems. See "Shared Renovate preset" below.
 - `.fleet.yml`: this hub's own rendered fleet config (the hub is also a fleet
   consumer). Managed by the sync; change `fleet/repos/.github.yml` instead.
-- `justfile`: `check`, `rubocop`, `tests`, `lychee`, and `install-hooks`
-  recipes, plus fleet-managed `audit` and `pinprick-audit` recipe blocks.
+- `justfile`: `check`, `rubocop`, `tests`, and `lychee` recipes, plus
+  fleet-managed `audit`, `pinprick-audit`, and `install-hooks` recipe blocks.
 - `.githooks/`: `commit-msg` (rejects AI attribution trailers, requires DCO
   sign-off on every commit) and `pre-push` (exact clean `HEAD` for non-tag
   refs, then `just check`).
