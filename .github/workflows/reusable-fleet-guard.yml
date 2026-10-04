@@ -25,8 +25,17 @@ jobs:
         id: exemption
         env:
           ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
-          if [[ "${ACTOR}" == "starhaven-bot[bot]" || "${ACTOR}" == "dependabot[bot]" ]]; then
+          if [[ "${AUTHOR}" == "starhaven-bot[bot]" && "${HEAD_REF}" == fleet-sync-* &&
+            "${HEAD_REPOSITORY}" == "${GITHUB_REPOSITORY}" &&
+            ( "${GITHUB_REPOSITORY}" != "starhaven-io/.github" ||
+              ( "${ACTOR}" == "starhaven-bot[bot]" && "${TRIGGERING_ACTOR}" == "starhaven-bot[bot]" ) ) ]]; then
+            echo "exempt=true" >> "${GITHUB_OUTPUT}"
+          elif [[ "${ACTOR}" == "dependabot[bot]" ]]; then
             echo "exempt=true" >> "${GITHUB_OUTPUT}"
           else
             echo "exempt=false" >> "${GITHUB_OUTPUT}"
