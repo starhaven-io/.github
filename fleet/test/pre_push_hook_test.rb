@@ -14,6 +14,12 @@ class PrePushHookTest < Minitest::Test
     [ "$1" = check ] || exit 64
     printf 'check\\n' >> "$HOOK_TEST_MARKER"
   SCRIPT
+  GIT_PROBE_JUST = <<~SCRIPT
+    #!/bin/sh
+    [ "$1" = check ] || exit 64
+    git -C "$HOOK_TEST_OTHER_REPO" rev-parse --absolute-git-dir >> "$HOOK_TEST_MARKER"
+    git -C "$HOOK_TEST_OTHER_REPO" config fleet.hooktest >> "$HOOK_TEST_MARKER"
+  SCRIPT
 
   HookResult = Data.define(:stdout, :stderr, :status) do
     def success?
@@ -116,10 +122,32 @@ class PrePushHookTest < Minitest::Test
   end
 
   def test_requires_just_for_branch_pushes
-    result = run_hook(branch_line(@first), "PATH" => "/usr/bin:/bin")
+    result = run_hook(branch_line(@first), { "PATH" => "/usr/bin:/bin" })
 
     assert_equal 127, result.status.exitstatus
     assert_includes result.stderr, "'just' is required"
+  end
+
+  def test_checks_run_without_the_linked_worktree_git_dir_git_exports
+    other_repo = File.join(@sandbox, "other")
+    git("init", "-q", other_repo)
+    worktree = File.join(@sandbox, "worktree")
+    git("worktree", "add", "-q", "--detach", worktree)
+    File.write(File.join(@bin, "just"), GIT_PROBE_JUST)
+
+    result = run_hook(
+      branch_line(@first),
+      {
+        "GIT_DIR" => git("-C", worktree, "rev-parse", "--absolute-git-dir").strip,
+        "GIT_CONFIG_PARAMETERS" => "'fleet.hooktest=kept'",
+        "HOOK_TEST_OTHER_REPO" => other_repo
+      },
+      chdir: worktree
+    )
+
+    assert result.success?, result.stderr
+    other_git_dir = git("-C", other_repo, "rev-parse", "--absolute-git-dir")
+    assert_equal "#{other_git_dir}kept\n", File.read(@marker)
   end
 
   private
@@ -166,8 +194,8 @@ class PrePushHookTest < Minitest::Test
       "refs/tags/lightweight #{lightweight} refs/tags/lightweight #{ZERO_SHA}\n"
   end
 
-  def run_hook(input, env = {})
-    stdout, stderr, status = Open3.capture3(git_env(env), "sh", HOOK, stdin_data: input, chdir: @repo)
+  def run_hook(input, env = {}, chdir: @repo)
+    stdout, stderr, status = Open3.capture3(git_env(env), "sh", HOOK, stdin_data: input, chdir:)
     HookResult.new(stdout:, stderr:, status:)
   end
 end
