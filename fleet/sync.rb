@@ -134,12 +134,14 @@ class FleetSync
   attr_reader :changes
 
   def initialize(hub_root:, repo_root:, repo_name:, check:, guard_base:, hub: false, adopt: false, publish: false,
-                 validate_only: false, list_managed_workflows: false, main_ref: nil, publication_preflight: false)
+                 validate_only: false, list_managed_workflows: false, main_ref: nil, publication_preflight: false,
+                 publication_postflight: false)
     @hub_root = Pathname(hub_root).expand_path
     @repo_root = Pathname(repo_root).expand_path
     @repo_name = repo_name
     @requested_check = check
     @publication_preflight = publication_preflight
+    @publication_postflight = publication_postflight
     @check = check || !guard_base.nil? || publication_preflight
     @guard_base = guard_base
     @hub = hub
@@ -156,8 +158,12 @@ class FleetSync
     raise FleetError, "--publish cannot be combined with --guard" if @publish && @guard_base
     raise FleetError, "--publish requires --main-ref" if @publish && !@main_ref
     raise FleetError, "--publication-preflight requires --publish" if @publication_preflight && !@publish
+    raise FleetError, "--publication-postflight requires --publish" if @publication_postflight && !@publish
 
     incompatible_preflight_mode = @requested_check || @guard_base || @adopt || @validate_only || @list_managed_workflows
+    if @publication_postflight && (incompatible_preflight_mode || @publication_preflight)
+      raise FleetError, "--publication-postflight cannot be combined with other render or validation modes"
+    end
     if @publication_preflight && incompatible_preflight_mode
       raise FleetError,
             "--publication-preflight cannot be combined with --check, --guard, --adopt, --validate-only, or " \
@@ -182,17 +188,35 @@ class FleetSync
 
     return run_guard(config) if @guard_base
 
+    return validate_ignored_managed_paths(config) if @publication_postflight
+
     render_all(config)
     if @publication_preflight
       @changes.clear
       return
     end
 
+    validate_ignored_managed_paths(config) if @publish
     report_changes
     raise FleetError, "fleet sync drift detected" if @check && @changes.any?
   end
 
   private
+
+  def validate_ignored_managed_paths(config)
+    paths = managed_whole_files(config) + guard_managed_blocks(config).map { |block| block.fetch(:path) }
+    stdout, stderr, status = Open3.capture3(
+      "git", "-C", @repo_root.to_s, "check-ignore", "--stdin", "-z", stdin_data: "#{paths.uniq.join("\0")}\0"
+    )
+    unless [0, 1].include?(status.exitstatus)
+      raise FleetError, "could not check ignored managed output: #{stderr.strip}"
+    end
+
+    ignored = stdout.split("\0")
+    return if ignored.empty?
+
+    raise FleetError, "cannot publish ignored managed output: #{ignored.map(&:inspect).join(", ")}"
+  end
 
   def render_all(config)
     validate_pinprick_pr_retirement(config)
@@ -2272,6 +2296,7 @@ options = {
   adopt: false,
   publish: false,
   publication_preflight: false,
+  publication_postflight: false,
   validate_only: false,
   list_managed_workflows: false,
   main_ref: nil
@@ -2292,6 +2317,9 @@ OptionParser.new do |parser|
   end
   parser.on("--publication-preflight", "Authenticate and validate publication inputs without writing") do
     options[:publication_preflight] = true
+  end
+  parser.on("--publication-postflight", "Validate rendered publication output without writing") do
+    options[:publication_postflight] = true
   end
   parser.on("--main-ref REF", "Trusted main commit that must contain the publication release") do |value|
     options[:main_ref] = value

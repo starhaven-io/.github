@@ -216,6 +216,77 @@ class FleetGuardRequiredWorkflowTest < Minitest::Test
     end
   end
 
+  def test_rejects_a_sync_tree_that_silently_omits_ignored_managed_output
+    repo = pull_request("sync-ignored-output") do |path|
+      File.delete(File.join(path, ".editorconfig"))
+      File.write(File.join(path, ".gitignore"), "\n.editorconfig\n", mode: "a")
+      File.write(File.join(path, "CLAUDE.md"), "@AGENTS.md\n@README.md\n")
+    end
+    base = git(repo, "rev-parse", "HEAD").strip
+    git(repo, "switch", "-q", "-c", sync_branch(repo))
+    _stdout, stderr, status = Open3.capture3(
+      ISOLATED_GIT_ENV.merge("GITHUB_REPOSITORY" => nil),
+      "ruby", "hub/fleet/sync.rb", "--hub-root", "hub", "--repo-root", ".", "--repo-name", ".github",
+      chdir: repo
+    )
+    assert status.success?, stderr
+    commit_all(repo, "sync omitting ignored output")
+    head = git(repo, "rev-parse", "HEAD").strip
+
+    output, status = verify_sync(repo, base:, head:)
+    refute status.success?, output
+    assert_includes output, "cannot publish ignored managed output"
+    assert_includes output, ".editorconfig"
+  end
+
+  def test_rejects_ignore_rules_introduced_by_the_authenticated_release
+    repo = pull_request("sync-release-ignores-output") do |path|
+      File.delete(File.join(path, ".editorconfig"))
+      File.write(File.join(path, "CLAUDE.md"), "@AGENTS.md\n@README.md\n")
+    end
+    base = git(repo, "rev-parse", "HEAD").strip
+    hub = File.join(repo, "hub")
+    version = "v2026.10.03.3"
+    File.write(File.join(hub, "fleet/blocks/local-state.gitignore"), ".editorconfig\n", mode: "a")
+    File.write(File.join(hub, "fleet/VERSION"), "#{version}\n")
+    commit_all(hub, "release changes ignore rules")
+    git(hub, "-c", "user.name=Required Guard Test", "-c", "user.email=guard@example.invalid",
+        "-c", "tag.gpgSign=false", "tag", "-a", version, "-m", "Fleet #{version}")
+    git(repo, "switch", "-q", "-c", sync_branch(repo))
+    _stdout, stderr, status = Open3.capture3(
+      ISOLATED_GIT_ENV.merge("GITHUB_REPOSITORY" => nil),
+      "ruby", "hub/fleet/sync.rb", "--hub-root", "hub", "--repo-root", ".", "--repo-name", ".github",
+      chdir: repo
+    )
+    assert status.success?, stderr
+    assert File.exist?(File.join(repo, ".editorconfig"))
+    assert_includes git(repo, "check-ignore", ".editorconfig"), ".editorconfig"
+    commit_all(repo, "sync omitting newly ignored output")
+    output, status = verify_sync(repo, base:, head: git(repo, "rev-parse", "HEAD").strip)
+    refute status.success?, output
+    assert_includes output, "cannot publish ignored managed output"
+  end
+
+  def test_accepts_a_release_that_removes_an_old_managed_ignore_rule
+    repo = pull_request("sync-removes-old-ignore") do |path|
+      File.delete(File.join(path, ".editorconfig"))
+      ignore = File.join(path, ".gitignore")
+      File.write(ignore, File.read(ignore).sub("# fleet:end", ".editorconfig\n# fleet:end"))
+      File.write(File.join(path, "CLAUDE.md"), "@AGENTS.md\n@README.md\n")
+    end
+    base = git(repo, "rev-parse", "HEAD").strip
+    git(repo, "switch", "-q", "-c", sync_branch(repo))
+    _stdout, stderr, status = Open3.capture3(
+      ISOLATED_GIT_ENV.merge("GITHUB_REPOSITORY" => nil),
+      "ruby", "hub/fleet/sync.rb", "--hub-root", "hub", "--repo-root", ".", "--repo-name", ".github",
+      chdir: repo
+    )
+    assert status.success?, stderr
+    commit_all(repo, "restore previously ignored managed output")
+    output, status = verify_sync(repo, base:, head: git(repo, "rev-parse", "HEAD").strip)
+    assert status.success?, output
+  end
+
   def test_accepts_a_sync_pull_request_updated_with_its_base_branch
     repo, _base, _head = sync_pull_request("sync-updated")
     branch = git(repo, "branch", "--show-current").strip

@@ -472,7 +472,9 @@ caller from the authenticated release tag. Publication always starts from the
 trusted default-branch workflow. Current-main code authenticates the release
 and performs a no-write safety preflight against the consumer; the exact tagged
 renderer then applies tagged canon from a separate checkout of the peeled
-release commit. The annotated tag's name, exact annotation,
+release commit. Current-main tooling then checks the rendered tree for ignored
+managed outputs before change collection or staging, using the newly rendered
+ignore rules. The annotated tag's name, exact annotation,
 peeled commit, embedded `fleet/VERSION`, and identity as the latest first-parent
 `main` commit that changed the version file must agree. Proposed releases remain
 renderable during PR validation, but no consumer write can fall back to an
@@ -545,7 +547,9 @@ for an explicitly private consumer. The sync authenticates the release tag and
 checks out both current-main tooling and the release snapshot. Current-main
 tooling first performs a no-write render preflight, including path, marker,
 configuration, and release checks. The tagged renderer then applies only tagged
-canon. It clones each consumer, renders `.fleet.yml`, tiers 1 through 3, and
+canon. A current-main, no-write postflight rejects ignored managed output
+before collecting drift, including ignore rules changed by the release itself.
+It clones each consumer, renders `.fleet.yml`, tiers 1 through 3, and
 first-party reusable workflow pins before diffing against the working tree. The
 hub consumer is checked out at the exact `main` commit captured during release
 authentication. Before write credentials are minted, the job intersects the
@@ -622,7 +626,7 @@ The organization-required `fleet-guard-required.yml` runs the guard from hub
 from a same-repository `fleet-sync-<version>` branch is checked as a sync
 delivery instead: `<version>` must be the release that hub `main` names and
 authenticates, and the head tree must equal, path for path and mode for mode,
-what the current-main preflight and that release's renderer produce from the
+what the current-main preflight, tagged renderer and current-main postflight produce from the
 pull request's merge base. Every other pull request, including a bot commit
 pushed onto another branch, faces the normal guard. A compromised sync App can
 therefore deliver only released canon through sync branches. Repository-owned

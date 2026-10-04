@@ -201,6 +201,14 @@ jobs:
             --repo-root repo \
             --repo-name "${REPO_NAME}" \
             "${hub_args[@]}"
+          ruby tool/fleet/sync.rb \
+            --hub-root release \
+            --repo-root repo \
+            --repo-name "${REPO_NAME}" \
+            --publish \
+            --publication-postflight \
+            --main-ref "${TRUSTED_MAIN_SHA}" \
+            "${hub_args[@]}"
 
       - name: Collect drift
         id: drift

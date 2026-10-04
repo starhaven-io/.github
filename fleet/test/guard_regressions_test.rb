@@ -553,6 +553,19 @@ class GuardRegressionsTest < Minitest::Test
 
     assert_sync_success(result)
     assert_equal drifted, File.read(path)
+
+    File.write(File.join(consumer, ".git/info/exclude"), "unrelated-cache/\n")
+    FileUtils.mkdir_p(File.join(consumer, "unrelated-cache"))
+    File.write(File.join(consumer, "unrelated-cache/data"), "ignored but not managed")
+    git(consumer, "rm", "--cached", ".editorconfig")
+    File.write(File.join(consumer, ".git/info/exclude"), ".editorconfig\n", mode: "a")
+    result = run_command(
+      ROOT, "ruby", File.join(ROOT, "fleet/sync.rb"), "--hub-root", hub,
+      "--repo-root", consumer, "--repo-name", ".github", "--hub", "--publish",
+      "--publication-postflight", "--main-ref", release_sha
+    )
+    assert_rejects(["ignored output", result, 'cannot publish ignored managed output: ".editorconfig"'])
+    refute_includes result.output, "unrelated-cache"
   end
 
   def test_rejects_unknown_dependabot_ignore_key
