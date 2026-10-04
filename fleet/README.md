@@ -31,7 +31,7 @@ Tier 1:
 |------|-------|
 | `.editorconfig` | all consumers |
 | `.githooks/commit-msg` | AI trailer-key and identifier guard on all commits; DCO sign-off required on every commit, including fixup, squash, and merge |
-| `.githooks/pre-push` | tag- and deletion-only skip, exact clean `HEAD` for every other ref, just-guard, `just check` |
+| `.githooks/pre-push` | tag- and deletion-only skip, exact clean `HEAD` for every other ref, just-guard, `just check` without git's repository-local environment |
 | `CLAUDE.md` | exactly `@AGENTS.md` |
 | `LICENSE` | one canonical file per license type in `fleet/files/licenses/` |
 | `.mcp.json` | astro-docs config; consumers with `astro-docs: true` |
