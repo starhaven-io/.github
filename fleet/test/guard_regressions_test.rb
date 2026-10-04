@@ -612,6 +612,24 @@ class GuardRegressionsTest < Minitest::Test
     refute_includes ci, "v2026.07.05.9"
   end
 
+  def test_mixed_case_hub_identity_cannot_hide_stale_pins
+    repo = scenario("mixed-case-reusable-pin")
+    line = reusable_workflow_line(repo, ref: "0" * 40, version: "v2026.07.05.9")
+    write_ci_workflow(repo, line.sub("starhaven-io/.github/", "Starhaven-IO/.GitHub/"))
+    assert_rejects(["--check", sync(repo, "--check"), ".github/workflows/ci.yml:reusable-pins"])
+    assert sync(repo).success?
+    assert_includes File.read(File.join(repo, ".github/workflows/ci.yml")), reusable_workflow_line(repo)
+  end
+
+  def test_mixed_case_hub_identity_cannot_hide_call_removal
+    repo = scenario("mixed-case-reusable-removal")
+    write_ci_workflow(repo, reusable_workflow_line(repo).sub("starhaven-io/.github/", "Starhaven-IO/.GitHub/"))
+    commit_all(repo, "add mixed-case workflow call")
+    FileUtils.rm(File.join(repo, ".github/workflows/ci.yml"))
+    commit_all(repo, "remove workflow call")
+    assert_rejects(["guard", consumer_guard(repo), "reusable workflow declassification rejected"])
+  end
+
   def test_syncs_multiple_quoted_and_yaml_reusable_pins
     repo = scenario("multi-reusable-pin-sync")
     ref = fleet_ref(repo)

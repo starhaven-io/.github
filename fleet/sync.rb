@@ -119,14 +119,14 @@ class FleetSync
   REUSABLE_WORKFLOW_USES_PATTERN = %r{
     ^(?<prefix>\s*uses:\s*)
     (?<quote>["']?)
-    (?<workflow>starhaven-io/\.github/\.github/workflows/reusable-[A-Za-z0-9_.-]+\.ya?ml)
+    (?<workflow>(?i:starhaven-io/\.github)/\.github/workflows/reusable-[A-Za-z0-9_.-]+\.ya?ml)
     @(?<ref>[^"'\s#]+)
     \k<quote>
     (?<comment>\s*(?:\#.*)?)$
   }x
   REUSABLE_WORKFLOW_VALUE_PATTERN = %r{
     \A
-    (?<workflow>starhaven-io/\.github/\.github/workflows/reusable-[A-Za-z0-9_.-]+\.ya?ml)
+    (?<workflow>(?i:starhaven-io/\.github)/\.github/workflows/reusable-[A-Za-z0-9_.-]+\.ya?ml)
     @(?<ref>\S+)
     \z
   }x
@@ -1508,7 +1508,7 @@ class FleetSync
   def semantic_reusable_pins(text)
     workflow_job_uses_nodes(text).filter_map do |_key, value|
       match = value.value.match(REUSABLE_WORKFLOW_VALUE_PATTERN)
-      match && [match[:workflow], match[:ref]]
+      match && [canonical_workflow_identity(match[:workflow]), match[:ref]]
     end
   rescue Psych::Exception
     []
@@ -1525,7 +1525,7 @@ class FleetSync
       next unless line_match && line_match[:workflow] == value_match[:workflow] && line_match[:ref] == value_match[:ref]
 
       WorkflowCall.new(
-        workflow: value_match[:workflow],
+        workflow: canonical_workflow_identity(value_match[:workflow]),
         ref: value_match[:ref],
         comment: line_match[:comment].strip,
         line: value.start_line
@@ -1533,6 +1533,10 @@ class FleetSync
     end
   rescue Psych::Exception => e
     raise FleetError, "workflow YAML could not be parsed: #{e.message}"
+  end
+
+  def canonical_workflow_identity(workflow)
+    workflow.sub(%r{\A[^/]+/[^/]+/}, "starhaven-io/.github/")
   end
 
   def workflow_job_uses_nodes(text)

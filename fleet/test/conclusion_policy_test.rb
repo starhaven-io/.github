@@ -55,6 +55,18 @@ class ConclusionPolicyTest < Minitest::Test
     assert_rejected("jobs omitted from the conclusion graph: pinprick")
   end
 
+  def test_requires_the_canonical_audit_at_a_full_commit
+    original = File.read(workflow_path)
+    call = "starhaven-io/.github/.github/workflows/reusable-pinprick-audit.yml@#{"0123456789" * 4}"
+    [call.sub("starhaven-io", "someone-else"), call.sub(/@.+/, "@main"),
+     call.sub(/@.+/, "@0123456"), "#{call}/extra"].each do |replacement|
+      write_workflow(original.sub(call, replacement))
+      assert_rejected("pinprick must call the fleet pinprick audit")
+    end
+    write_workflow(original.sub("starhaven-io/.github/", "Starhaven-IO/.GitHub/"))
+    assert ConclusionPolicy.validate!(repo_root: @root, contract: @contract)
+  end
+
   def test_rejects_an_unclassified_job
     mutate_workflow do |text|
       text.sub("  conclusion:\n", "  advisory:\n    runs-on: ubuntu-24.04\n  conclusion:\n")
