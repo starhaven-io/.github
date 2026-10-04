@@ -150,6 +150,7 @@ class FleetSyncWorkflowTest < Minitest::Test
     assert_includes publication, 'gh api "repos/${REPOSITORY}/pulls" -X POST --input -'
     assert_operator publication.index("pr_identity.rb preflight"), :<,
                     publication.index("git/ref/heads/${BRANCH}")
+    refute_includes publication, '|| echo "::warning::could not enable auto-merge'
     refute_includes publication, "gh pr list"
     refute_includes publication, "gh pr create"
   end

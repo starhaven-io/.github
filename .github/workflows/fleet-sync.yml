@@ -428,8 +428,7 @@ jobs:
           # let GitHub land them once required checks pass instead of piling up.
           PR_NUMBER=$(verified_pull select)
           gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --auto --squash \
-            --match-head-commit "${COMMIT_OID}" \
-            || echo "::warning::could not enable auto-merge for ${REPOSITORY}#${PR_NUMBER}"
+            --match-head-commit "${COMMIT_OID}"
 
           ruby ../tool/fleet/pr_identity.rb stale \
             --repository "${REPOSITORY}" \
