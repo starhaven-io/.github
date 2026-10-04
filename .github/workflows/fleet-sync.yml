@@ -356,20 +356,10 @@ jobs:
             --base main \
             --author "${BOT_USER}" < "${PULLS_FILE}"
 
-          if gh api "repos/${REPOSITORY}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
-            gh api "repos/${REPOSITORY}/git/refs/heads/${BRANCH}" \
-              -X PATCH \
-              -f "sha=${BASE_SHA}" \
-              -F force=true
-          else
-            gh api "repos/${REPOSITORY}/git/refs" \
-              -X POST \
-              -f "ref=refs/heads/${BRANCH}" \
-              -f "sha=${BASE_SHA}"
-          fi
-
           # shellcheck disable=SC2016 # Ruby interpolation is intentionally literal to the shell.
-          FILE_CHANGES=$(ruby -rjson -e '
+          FILE_CHANGES_PATH="${RUNNER_TEMP}/fleet-file-changes.json"
+          COMMIT_REQUEST="${RUNNER_TEMP}/fleet-commit-request.json"
+          ruby -rjson -e '
             paths = File.binread("../changed-files.nul").split("\0").reject(&:empty?)
             additions = []
             deletions = []
@@ -386,7 +376,7 @@ jobs:
               end
             end
             print JSON.generate({ additions: additions, deletions: deletions })
-          ')
+          ' > "${FILE_CHANGES_PATH}"
 
           COMMIT_BODY="Signed-off-by: ${BOT_USER} <${BOT_EMAIL}>"
           COMMIT_RESPONSE="${RUNNER_TEMP}/fleet-commit-response.json"
@@ -397,18 +387,32 @@ jobs:
             --arg title "${TITLE}" \
             --arg body "${COMMIT_BODY}" \
             --arg head "${BASE_SHA}" \
-            --argjson file_changes "${FILE_CHANGES}" \
+            --slurpfile file_changes "${FILE_CHANGES_PATH}" \
             '{
               query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
               variables: {
                 input: {
                   branch: { repositoryNameWithOwner: $repo, branchName: $branch },
                   message: { headline: $title, body: $body },
-                  fileChanges: $file_changes,
+                  fileChanges: $file_changes[0],
                   expectedHeadOid: $head
                 }
               }
-            }' | gh api graphql --input - > "${COMMIT_RESPONSE}"
+            }' > "${COMMIT_REQUEST}"
+
+          if gh api "repos/${REPOSITORY}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
+            gh api "repos/${REPOSITORY}/git/refs/heads/${BRANCH}" \
+              -X PATCH \
+              -f "sha=${BASE_SHA}" \
+              -F force=true
+          else
+            gh api "repos/${REPOSITORY}/git/refs" \
+              -X POST \
+              -f "ref=refs/heads/${BRANCH}" \
+              -f "sha=${BASE_SHA}"
+          fi
+
+          gh api graphql --input "${COMMIT_REQUEST}" > "${COMMIT_RESPONSE}"
           COMMIT_OID=$(jq -er '.data.createCommitOnBranch.commit.oid' "${COMMIT_RESPONSE}")
 
           OPEN_PR=$(verified_pull optional)

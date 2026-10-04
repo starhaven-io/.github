@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
+require "etc"
 require "fileutils"
+require "json"
 require "open3"
 require "tmpdir"
 require "yaml"
@@ -152,6 +154,36 @@ class FleetSyncWorkflowTest < Minitest::Test
                     publication.index("git/ref/heads/${BRANCH}")
     refute_includes publication, "gh pr list"
     refute_includes publication, "gh pr create"
+    assert_operator publication.index('> "${COMMIT_REQUEST}"'), :<,
+                    publication.index("git/ref/heads/${BRANCH}")
+    assert_includes publication, 'gh api graphql --input "${COMMIT_REQUEST}"'
+  end
+
+  def test_large_publication_payload_is_written_without_an_argv_sized_value
+    repo = committed_repo("README.md")
+    line = "large payload\n"
+    contents = line * ((Etc.sysconf(Etc::SC_ARG_MAX) / line.bytesize) + 1)
+    File.write(File.join(repo, "README.md"), contents)
+    File.binwrite(File.join(File.dirname(repo), "changed-files.nul"), "README.md\0retired.yml\0")
+    publication = @steps.find { |step| step["name"] == "Create verified sync commit and open PR" }.fetch("run")
+    builder = publication[publication.index("FILE_CHANGES_PATH=")...publication.index('if gh api "repos/')]
+    refute_includes builder, "--argjson file_changes"
+    stdout, stderr, status = Open3.capture3(
+      ISOLATED_GIT_ENV.merge("RUNNER_TEMP" => repo, "REPOSITORY" => "starhaven-io/test",
+                             "BRANCH" => "fleet-sync-test", "TITLE" => "test", "BOT_USER" => "bot",
+                             "BOT_EMAIL" => "bot@example.invalid", "BASE_SHA" => "a" * 40),
+      "bash", "-euo", "pipefail", "-c", builder, chdir: repo
+    )
+    assert status.success?, "#{stdout}#{stderr}"
+    input = JSON.parse(File.read(File.join(repo, "fleet-commit-request.json"))).dig("variables", "input")
+    assert_equal "a" * 40, input.fetch("expectedHeadOid")
+    changes = input.fetch("fileChanges")
+    assert_equal contents, changes.fetch("additions").first.fetch("contents").unpack1("m0")
+    assert_equal [{ "path" => "retired.yml" }], changes.fetch("deletions")
+    assert_raises(Errno::E2BIG) do
+      Open3.capture3("jq", "-n", "--argjson", "file_changes",
+                     File.read(File.join(repo, "fleet-file-changes.json")), ".")
+    end
   end
 
   private
