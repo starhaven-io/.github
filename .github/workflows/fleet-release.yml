@@ -120,22 +120,11 @@ jobs:
             --base main \
             --author "${BOT_USER}" < "${PULLS_FILE}"
 
-          if gh api "repos/${REPOSITORY}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
-            gh api "repos/${REPOSITORY}/git/refs/heads/${BRANCH}" \
-              -X PATCH \
-              -f "sha=${BASE_SHA}" \
-              -F force=true
-          else
-            gh api "repos/${REPOSITORY}/git/refs" \
-              -X POST \
-              -f "ref=refs/heads/${BRANCH}" \
-              -f "sha=${BASE_SHA}"
-          fi
-
           CONTENT=$(printf "%s\n" "${VERSION}" | ruby -e 'print [STDIN.read].pack("m0")')
           ADDITIONS=$(jq -n --arg contents "${CONTENT}" '[{ path: "fleet/VERSION", contents: $contents }]')
           COMMIT_BODY="Signed-off-by: ${BOT_USER} <${BOT_EMAIL}>"
 
+          COMMIT_REQUEST="${RUNNER_TEMP}/fleet-release-commit-request.json"
           COMMIT_RESPONSE="${RUNNER_TEMP}/fleet-release-commit-response.json"
           jq -n \
             --arg repo "${REPOSITORY}" \
@@ -154,7 +143,21 @@ jobs:
                   expectedHeadOid: $head
                 }
               }
-            }' | gh api graphql --input - > "${COMMIT_RESPONSE}"
+            }' > "${COMMIT_REQUEST}"
+
+          if gh api "repos/${REPOSITORY}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
+            gh api "repos/${REPOSITORY}/git/refs/heads/${BRANCH}" \
+              -X PATCH \
+              -f "sha=${BASE_SHA}" \
+              -F force=true
+          else
+            gh api "repos/${REPOSITORY}/git/refs" \
+              -X POST \
+              -f "ref=refs/heads/${BRANCH}" \
+              -f "sha=${BASE_SHA}"
+          fi
+
+          gh api graphql --input "${COMMIT_REQUEST}" > "${COMMIT_RESPONSE}"
           COMMIT_OID=$(jq -er '.data.createCommitOnBranch.commit.oid' "${COMMIT_RESPONSE}")
 
           OPEN_PR=$(verified_pull optional)
