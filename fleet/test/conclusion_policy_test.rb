@@ -49,6 +49,27 @@ class ConclusionPolicyTest < Minitest::Test
     assert ConclusionPolicy.validate!(repo_root: @root, contract: @contract)
   end
 
+  def test_accepts_quoted_and_short_trigger_forms
+    original = File.read(workflow_path)
+    triggers = original[/^on:\n.*?^jobs:/m].delete_suffix("jobs:")
+    ["\"on\":\n  pull_request:\n", "on: pull_request\n", "on: [push, pull_request]\n"].each do |replacement|
+      write_workflow(original.sub(triggers, replacement))
+      assert ConclusionPolicy.validate!(repo_root: @root, contract: @contract), replacement
+    end
+  end
+
+  def test_rejects_missing_or_malformed_triggers_as_policy_errors
+    original = File.read(workflow_path)
+    triggers = original[/^on:\n.*?^jobs:/m].delete_suffix("jobs:")
+    ["", "on: 42\n", "on: [pull_request, 42]\n", "on: push\n", "on: []\n",
+     "on: pull_request\n\"on\": push\n"].each do |replacement|
+      write_workflow(original.sub(triggers, replacement))
+      assert_raises(ConclusionPolicy::Error, replacement) do
+        ConclusionPolicy.validate!(repo_root: @root, contract: @contract)
+      end
+    end
+  end
+
   def test_rejects_an_audit_omitted_from_the_aggregate
     mutate_workflow { |text| text.sub("needs: [test, pinprick]", "needs: [test]") }
 

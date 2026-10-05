@@ -26,7 +26,9 @@ class ConclusionPolicy
     stream = Psych.parse_stream(text)
     require_value(stream.children.one?, "#{workflow_path} must contain exactly one YAML document")
     workflow = mapping(YAML.safe_load(text, permitted_classes: [], aliases: false), workflow_path)
-    validate_pull_request_trigger(mapping(workflow.fetch(true), "#{workflow_path} triggers"))
+    require_value(!(workflow.key?(true) && workflow.key?("on")), "workflow must declare on only once")
+    triggers = workflow.key?("on") ? workflow["on"] : workflow[true]
+    validate_pull_request_trigger(triggers)
 
     jobs = mapping(workflow["jobs"], "#{workflow_path} jobs")
     conclusion = mapping(jobs["conclusion"], "conclusion job")
@@ -66,6 +68,12 @@ class ConclusionPolicy
   private
 
   def validate_pull_request_trigger(triggers)
+    triggers = [triggers] if triggers.is_a?(String)
+    if triggers.is_a?(Array)
+      require_value(triggers.all?(String), "workflow triggers must be event names")
+      triggers = triggers.to_h { |event| [event, nil] }
+    end
+    triggers = mapping(triggers, "workflow triggers")
     require_value(triggers.key?("pull_request"), "workflow must run on pull_request")
     pull_request = triggers["pull_request"]
     return if pull_request.nil?
