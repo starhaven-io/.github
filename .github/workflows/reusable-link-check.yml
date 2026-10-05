@@ -18,6 +18,9 @@ on:
 
 permissions: {}
 
+env:
+  ASTRO_TELEMETRY_DISABLED: "1"
+
 defaults:
   run:
     shell: bash -xeuo pipefail {0}
