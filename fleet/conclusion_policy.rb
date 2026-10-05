@@ -112,7 +112,8 @@ class ConclusionPolicy
     uses = job["uses"].to_s
     # Temporary compatibility guard: relax this when the fleet-pinned Pinprick
     # can distinguish jobs.<id>.uses local workflows from step-level actions.
-    require_value(uses.include?("/.github/workflows/reusable-pinprick-audit.yml@"),
+    workflow = %r{\A(?i:starhaven-io/\.github)/\.github/workflows/reusable-pinprick-audit\.yml@[0-9a-fA-F]{40}\z}
+    require_value(uses.match?(workflow),
                   "#{job_id} must call the fleet pinprick audit")
     require_value(job.dig("with", "fail-on-findings") == true,
                   "#{job_id} must set fail-on-findings: true")
