@@ -95,7 +95,8 @@ class ReleaseWorkflowTest < Minitest::Test
     render = step(@sync, "sync", "Render fleet surfaces").fetch("run")
     protect = step(@sync, "sync", "Protect newer hub paths").fetch("run")
     preflight = command_block(render, "ruby tool/fleet/sync.rb")
-    tagged_render = command_block(render, "ruby release/fleet/sync.rb")
+    tagged_render = command_block(render, "ruby release/fleet/sync.rb").split("ruby tool/fleet/sync.rb", 2).first
+    postflight = render[render.rindex("ruby tool/fleet/sync.rb")..]
     tool_checkout = step(@sync, "sync", "Checkout trusted main tooling").fetch("with")
     release_checkout = step(@sync, "sync", "Checkout authenticated release canon").fetch("with")
     consumer_checkout = step(@sync, "sync", "Checkout consumer").fetch("with")
@@ -118,6 +119,10 @@ class ReleaseWorkflowTest < Minitest::Test
     assert_includes render, "--publish"
     assert_includes render, "--main-ref"
     assert_includes preflight, "--publication-preflight"
+    assert_includes postflight, "--publication-postflight"
+    assert_includes postflight, "--publish"
+    assert_includes postflight, '--main-ref "${TRUSTED_MAIN_SHA}"'
+    assert_operator render.index("ruby release/fleet/sync.rb"), :<, render.rindex("ruby tool/fleet/sync.rb")
     assert_includes tagged_render, "--hub-root release"
     refute_includes tagged_render, "--publish"
     refute_includes tagged_render, "--main-ref"

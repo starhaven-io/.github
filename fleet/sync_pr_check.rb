@@ -47,7 +47,7 @@ module FleetSyncPullRequest
     raise Error, "release authentication failed: #{e.message}"
   end
 
-  # Mirrors fleet-sync.yml: current-main preflight, then the tagged renderer.
+  # Mirrors fleet-sync.yml: current-main preflight, tagged render, current-main postflight.
   def rendered_tree(hub_root:, repo_root:, repo_name:, release:, main_ref:, merge_base:)
     Dir.mktmpdir("fleet-sync-pr-") do |directory|
       release_root = File.join(directory, "release")
@@ -59,6 +59,8 @@ module FleetSyncPullRequest
                "--repo-name", repo_name, "--publish", "--publication-preflight", "--main-ref", main_ref)
         render("ruby", File.join(release_root, "fleet/sync.rb"), "--hub-root", release_root,
                "--repo-root", render_root, "--repo-name", repo_name)
+        render("ruby", File.join(hub_root, "fleet/sync.rb"), "--hub-root", release_root, "--repo-root", render_root,
+               "--repo-name", repo_name, "--publish", "--publication-postflight", "--main-ref", main_ref)
         git(render_root, "add", "--all")
         git(render_root, "write-tree")
       ensure
