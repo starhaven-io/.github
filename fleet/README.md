@@ -631,7 +631,9 @@ pull request's merge base. Every other pull request, including a bot commit
 pushed onto another branch, faces the normal guard. A compromised sync App can
 therefore deliver only released canon through sync branches. Repository-owned
 content in other bot pull requests still depends on each repository's merge
-policy.
+policy. The hub is outside this organization-required consumer guard; its
+in-tree sync exemption additionally requires both the event actor and rerun
+actor to be Starhaven Bot.
 
 ## Security Posture
 
