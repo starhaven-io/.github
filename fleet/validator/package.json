@@ -5,6 +5,6 @@
   "description": "Locked JavaScript tooling used only by fleet validation",
   "license": "MIT",
   "devDependencies": {
-    "renovate": "44.115.13"
+    "renovate": "44.117.2"
   }
 }
