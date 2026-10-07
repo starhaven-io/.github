@@ -230,6 +230,38 @@ class GuardRegressionsTest < Minitest::Test
     assert_sync_success(sync(repo, "--check"))
   end
 
+  def test_consumer_cannot_weaken_coderabbit_approval_policy
+    repo = scenario("coderabbit-policy-edit")
+    path = File.join(repo, ".coderabbit.config.ts")
+    File.write(path, File.read(path).sub("allow_author_approval: false", "allow_author_approval: true"))
+    commit_all(repo, "weaken reviewer policy")
+
+    assert_rejects(["guard", consumer_guard(repo), "managed surface change rejected"])
+  end
+
+  def test_coderabbit_yaml_cannot_override_managed_typescript
+    %w[.coderabbit.yaml .coderabbit.yml coderabbit.yaml coderabbit.yml].each_with_index do |filename, index|
+      repo = scenario("coderabbit-yaml-#{index}")
+      File.write(File.join(repo, filename), "reviews:\n  request_changes_workflow: true\n")
+      commit_all(repo, "override reviewer policy")
+
+      assert_rejects(
+        ["guard", consumer_guard(repo), "managed surface change rejected"],
+        ["sync", sync(repo), "CodeRabbit YAML overrides the managed TypeScript policy"]
+      )
+    end
+  end
+
+  def test_coderabbit_policy_is_retired_when_adoption_is_removed
+    repo = scenario("coderabbit-retirement")
+    config = fleet_config(repo)
+    config.fetch("params").delete("coderabbit")
+    write_fleet_config(repo, config)
+
+    assert_sync_success(sync(repo))
+    refute_path_exists File.join(repo, ".coderabbit.config.ts")
+  end
+
   def test_fixture_git_ignores_an_inherited_linked_worktree_git_dir
     outer = File.join(TMPDIR, "inherited-git-dir")
     linked = File.join(TMPDIR, "inherited-git-dir-worktree")
