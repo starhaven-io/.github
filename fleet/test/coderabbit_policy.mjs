@@ -41,6 +41,8 @@ function check(label, changes, expected, evaluate = policy) {
   assert.equal(config.reviews.auto_review.enabled, true, label);
   assert.equal(config.reviews.auto_review.ignore_usernames.length, 0, label);
   assert.equal(config.reviews.auto_review.auto_pause_after_reviewed_commits, 0, label);
+  const filters = ["**/*.json", ...(input.repo.name === "macOSdb" ? ["!data/macos/**", "!data/xcode/**"] : [])];
+  assert.equal(JSON.stringify(config.reviews.path_filters), JSON.stringify(filters), label);
   checked += 1;
 }
 function bot(label, repo, branch, paths, expected, evaluate = policy) {
@@ -66,7 +68,14 @@ for (const [author, branch] of [["dependabot[bot]", "dependabot/npm_and_yarn/sit
   check(`${author} wrong branch`, { pr: { author, headBranch: "fix/arbitrary" } }, false);
   check(`${author} unavailable paths`, { pr: { author, headBranch: branch, changedFiles: { status: "unavailable", paths: [] } } }, false);
   check(`${author} empty paths`, { pr: { author, headBranch: branch, changedFiles: { status: "resolved", paths: [] } } }, false);
+  for (const lock of ["Cargo.lock", "site/package-lock.json", "Gemfile.lock", "go.sum", "yarn.lock", "pnpm-lock.yaml", "bun.lockb",
+    "Brewy.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved"]) {
+    check(`${author} ${lock} alone`, { pr: { author, headBranch: branch, changedFiles: { status: "resolved", paths: [lock] } } }, false);
+  }
+  check(`${author} manifest with lockfile`, { pr: { author, headBranch: branch, changedFiles: { status: "resolved", paths: ["site/package.json", "site/package-lock.json"] } } }, true);
+  check(`${author} lock-named source`, { pr: { author, headBranch: branch, changedFiles: { status: "resolved", paths: ["src/lock.rs"] } } }, true);
 }
+check("maintainer lockfile alone", { pr: { changedFiles: { status: "resolved", paths: ["Cargo.lock"] } } }, true);
 bot("fleet sync", "homebrew-tap", "fleet-sync-v2026.10.06.1", ["AGENTS.md"], true);
 bot("malformed fleet version", "homebrew-tap", "fleet-sync-unreviewed", ["AGENTS.md"], false);
 bot("fleet release not yet enrolled", ".github", "fleet-release-v2026.10.06.1", ["fleet/VERSION"], false);

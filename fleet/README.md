@@ -39,6 +39,11 @@ Tier 1:
 | `scripts/upload-codecov.py` | fixed-version, SHA-256-verified OIDC uploader; consumers with `codecov: true` |
 | `.coderabbit.config.ts` | review and automatic-approval policy; public consumers with `coderabbit: true` |
 
+Fleet JavaScript and TypeScript under `fleet/files/` must pass `biome check` with
+`fleet/validator/biome.json`, which mirrors pkgstory's root Biome style.
+starhaven.io's single-quote Prettier cannot accept the same bytes, so it ignores
+these files instead.
+
 Tier 2 (managed blocks):
 
 | Block | Host file | Scope |
@@ -552,7 +557,11 @@ CodeRabbit reviews every author's non-draft PRs and new commits without an
 automatic pause. It uses the Chill profile, puts summaries in the walkthrough,
 reports review errors as failures, and retains actionable prompts for coding
 agents. Docstring coverage, ancillary summary suggestions and code-writing
-finishing touches are disabled. The file is self-contained rather than inheriting
+finishing touches are disabled. CodeRabbit's Autopilot preview, offered as a PR
+comment checkbox, is outside this configuration; do not start it. DCO, the fleet
+guard, the sync render check and cask head binding contain its commits, but a
+signed-off commit to repo-owned code would still reach review. The file is
+self-contained rather than inheriting
 organization defaults; global overrides still need a separate hosted check.
 `chat.allow_non_org_members: false` restricts comment commands to organization
 members without excluding outside contributors from automatic reviews.
@@ -566,7 +575,8 @@ Within the selected repositories, default-branch PRs must match this author and
 change policy (repository-specific paths remain dormant until enrollment):
 
 - `p-linnane`.
-- `dependabot[bot]` and `renovate[bot]` on their respective update branches.
+- `dependabot[bot]` and `renovate[bot]` on their respective update branches,
+  when at least one changed file is not a lockfile.
 - `starhaven-bot[bot]` fleet-sync branches with a CalVer suffix; the required
   fleet guard remains responsible for authenticating the released render.
 - Hub fleet-release branches changing only `fleet/VERSION`.
@@ -578,8 +588,14 @@ Bot eligibility requires complete, nonempty changed-file metadata. Unexpected
 authors, branches, mixed file sets, drafts and unresolved metadata receive no
 automatic approval under this configuration. This is review routing, not an audit
 of upstream package contents or a replacement for CI and provenance checks.
-CodeRabbit can approve even when its default path filters exclude every changed
-file; a lockfile-only approval does not establish content review of the lockfile.
+CodeRabbit's default path filters skip lockfiles, `*.json`, `*.svg`, `dist/**`
+and other generated or binary paths, and it can still approve a PR whose files
+it skipped. The config restores JSON review with the exact default pattern
+`**/*.json`, which lifts that exclusion rather than narrowing review, so
+manifests, npm script policy, Renovate presets and audited-action catalogs are
+reviewed. macOSdb's generated catalog under `data/` stays excluded; catalog
+decisions rest on bot, branch and path provenance, not content review. A
+maintainer PR that changes only skipped files gets no content review.
 
 GitHub owns merge enforcement for separately enrolled repositories: one approval,
 stale-review dismissal, approval after the latest push, resolved review threads,
@@ -642,7 +658,9 @@ Roll out in dependency order:
 2. Verify the resolved CodeRabbit configuration, absence of conflicting global
    overrides, app permissions, and completed approvals in the pilot. Verify
    other adopters get reviews without formal decisions, outside-contributor
-   reviews still run, and nonmember commands are denied.
+   reviews still run, and nonmember commands are denied. Confirm a PR changing
+   both a JSON file and a non-JSON file gets both reviewed, proving the
+   `**/*.json` filter lifts the default instead of restricting review to JSON.
 3. Enroll only `homebrew-tap` in the separate GitHub review ruleset as a pilot.
    Keep baseline PR and required-check rules in place. With that gate active,
    verify a bot's approval counts, a new commit dismisses it and gets reviewed

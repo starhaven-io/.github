@@ -77,7 +77,8 @@ Top level:
 - `files/`, `blocks/`, `templates/`: tier-1 whole files, tier-2 fenced block
   content, and tier-3 ERB templates.
 - `validator/`: the locked Renovate CLI used to validate the shared preset and
-  every rendered adopter stub in CI.
+  every rendered adopter stub in CI, and the locked Biome that checks fleet
+  JavaScript and TypeScript in consumer style.
 - `test/`: hook and npm policy tests, the guard and renderer regression suite,
   the DCO, required-guard, conclusion, and conventional-commits workflow
   contract tests, and golden-render tests that render every consumer config

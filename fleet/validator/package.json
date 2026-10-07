@@ -5,6 +5,7 @@
   "description": "Locked JavaScript tooling used only by fleet validation",
   "license": "MIT",
   "devDependencies": {
+    "@biomejs/biome": "2.5.14",
     "renovate": "44.117.2"
   }
 }
