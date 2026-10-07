@@ -47,6 +47,7 @@ jobs:
           while IFS= read -r -d '' path; do
             case "${path}" in
               fleet/* | \
+              biome.json | \
               renovate-config.json | \
               .github/workflows/conclusion.yml | \
               .github/workflows/dco-required.yml | \
