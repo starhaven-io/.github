@@ -39,10 +39,18 @@ Tier 1:
 | `scripts/upload-codecov.py` | fixed-version, SHA-256-verified OIDC uploader; consumers with `codecov: true` |
 | `.coderabbit.config.ts` | review and automatic-approval policy; public consumers with `coderabbit: true` |
 
-Fleet JavaScript and TypeScript under `fleet/files/` must pass `biome check` with
-`fleet/validator/biome.json`, which mirrors pkgstory's root Biome style.
+The hub's root `biome.json` supports configuration discovery by review tools
+such as CodeRabbit. Fleet validation runs `biome lint .` for supported hub files,
+respecting `.gitignore`. Formatting and import organization use pkgstory's Biome
+style and are enforced only for JavaScript and TypeScript files under
+`fleet/files/`, plus `fleet/validator/package.json`.
 starhaven.io's single-quote Prettier cannot accept the same bytes, so it ignores
-these files instead.
+these files instead. Other hub files have not been normalized to that style.
+The locked Biome executable remains in `fleet/validator/`, and the config's
+`$schema` points at that package's schema, so editors get validation and
+completion once those dependencies are installed. A versioned schema URL would
+make CodeRabbit substitute its defaults whenever it is newer than CodeRabbit's
+bundled Biome.
 
 Tier 2 (managed blocks):
 

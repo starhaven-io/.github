@@ -57,6 +57,9 @@ Top level:
   inherited community-health files and default templates.
 - `renovate-config.json`: shared Renovate preset for tool pins that sit outside
   the Dependabot-managed ecosystems. See "Shared Renovate preset" below.
+- `biome.json`: lint configuration for supported hub files. Fleet tests enforce
+  formatting and import organization only for JavaScript/TypeScript under
+  `fleet/files/` and the validator package manifest.
 - `.fleet.yml`: this hub's own rendered fleet config (the hub is also a fleet
   consumer). Managed by the sync; change `fleet/repos/.github.yml` instead.
 - `justfile`: `check`, `rubocop`, `tests`, and `lychee` recipes, plus

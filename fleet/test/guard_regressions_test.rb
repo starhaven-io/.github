@@ -2007,6 +2007,7 @@ class ConclusionContractTest < Minitest::Test
       classify("fleet/templates/fleet-guard.yml.erb")
     )
     assert_equal({ "audit" => "false", "fleet" => "true" }, classify("renovate-config.json"))
+    assert_equal({ "audit" => "false", "fleet" => "true" }, classify("biome.json"))
     assert_equal "needs.changes.outputs.fleet == 'true'", @jobs.fetch("fleet").fetch("if")
     assert_equal "$/.github/workflows/fleet-validate.yml", @jobs.fetch("fleet").fetch("uses")
 
