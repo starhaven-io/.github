@@ -41,8 +41,9 @@ function check(label, changes, expected, evaluate = policy) {
   assert.equal(config.reviews.auto_review.enabled, true, label);
   assert.equal(config.reviews.auto_review.ignore_usernames.length, 0, label);
   assert.equal(config.reviews.auto_review.auto_pause_after_reviewed_commits, 0, label);
-  const filters = ["**/*.json", ...(input.repo.name === "macOSdb" ? ["!data/macos/**", "!data/xcode/**"] : [])];
+  const filters = input.repo.name === "macOSdb" ? ["!data/macos/**", "!data/xcode/**"] : [];
   assert.equal(JSON.stringify(config.reviews.path_filters), JSON.stringify(filters), label);
+  assert.ok(config.reviews.path_filters.every((pattern) => pattern.startsWith("!")), `${label}: includes narrow review`);
   checked += 1;
 }
 function bot(label, repo, branch, paths, expected, evaluate = policy) {

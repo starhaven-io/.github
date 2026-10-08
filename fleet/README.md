@@ -598,12 +598,13 @@ automatic approval under this configuration. This is review routing, not an audi
 of upstream package contents or a replacement for CI and provenance checks.
 CodeRabbit's default path filters skip lockfiles, `*.json`, `*.svg`, `dist/**`
 and other generated or binary paths, and it can still approve a PR whose files
-it skipped. The config restores JSON review with the exact default pattern
-`**/*.json`, which lifts that exclusion rather than narrowing review, so
-manifests, npm script policy, Renovate presets and audited-action catalogs are
-reviewed. macOSdb's generated catalog under `data/` stays excluded; catalog
-decisions rest on bot, branch and path provenance, not content review. A
-maintainer PR that changes only skipped files gets no content review.
+it skipped. Adding the exact default pattern `**/*.json` to `path_filters`
+lifted the JSON exclusion but, in hosted reviews, also limited review to JSON
+files, so the config uses exclusions only. JSON manifests, npm script policy,
+Renovate presets and audited-action catalogs therefore get no CodeRabbit
+content review. macOSdb's generated catalog under `data/` is excluded
+explicitly; catalog decisions rest on bot, branch and path provenance, not
+content review. A PR that changes only skipped files gets no content review.
 
 GitHub owns merge enforcement for separately enrolled repositories: one approval,
 stale-review dismissal, approval after the latest push, resolved review threads,
@@ -666,9 +667,8 @@ Roll out in dependency order:
 2. Verify the resolved CodeRabbit configuration, absence of conflicting global
    overrides, app permissions, and completed approvals in the pilot. Verify
    other adopters get reviews without formal decisions, outside-contributor
-   reviews still run, and nonmember commands are denied. Confirm a PR changing
-   both a JSON file and a non-JSON file gets both reviewed, proving the
-   `**/*.json` filter lifts the default instead of restricting review to JSON.
+   reviews still run, and nonmember commands are denied. Confirm a mixed PR's
+   walkthrough lists its source files as reviewed, not "included by none".
 3. Enroll only `homebrew-tap` in the separate GitHub review ruleset as a pilot.
    Keep baseline PR and required-check rules in place. With that gate active,
    verify a bot's approval counts, a new commit dismisses it and gets reviewed
