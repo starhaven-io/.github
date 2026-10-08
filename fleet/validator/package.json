@@ -6,6 +6,6 @@
   "license": "MIT",
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
-    "renovate": "44.126.0"
+    "renovate": "44.126.1"
   }
 }
