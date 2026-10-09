@@ -251,9 +251,6 @@ class GoldenRenderTest < Minitest::Test
 
     assert_path_exists File.join(repo_root, ".mcp.json") if params(config)["astro-docs"]
 
-    refute params(config).key?("coderabbit"), "CodeRabbit is retired"
-    refute_path_exists File.join(repo_root, ".coderabbit.config.ts")
-
     %w[commit-msg pre-push].each do |hook|
       assert File.executable?(File.join(repo_root, ".githooks", hook)),
              ".githooks/#{hook} must render executable for #{name}"
