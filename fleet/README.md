@@ -37,10 +37,8 @@ Tier 1:
 | `.mcp.json` | astro-docs config; consumers with `astro-docs: true` |
 | `scripts/check-npm-install-policy.mjs` | deny-by-default install-script checker; consumers with `npm-policy` |
 | `scripts/upload-codecov.py` | fixed-version, SHA-256-verified OIDC uploader; consumers with `codecov: true` |
-| `.coderabbit.config.ts` | review and automatic-approval policy; public consumers with `coderabbit: true` |
 
-The hub's root `biome.json` supports configuration discovery by review tools
-such as CodeRabbit. Fleet validation runs `biome lint .` for supported hub files,
+Fleet validation runs `biome lint .` for supported hub files,
 respecting `.gitignore`. Formatting and import organization use pkgstory's Biome
 style and are enforced only for JavaScript and TypeScript files under
 `fleet/files/`, plus `fleet/validator/package.json`.
@@ -48,9 +46,7 @@ starhaven.io's single-quote Prettier cannot accept the same bytes, so it ignores
 these files instead. Other hub files have not been normalized to that style.
 The locked Biome executable remains in `fleet/validator/`, and the config's
 `$schema` points at that package's schema, so editors get validation and
-completion once those dependencies are installed. A versioned schema URL would
-make CodeRabbit substitute its defaults whenever it is newer than CodeRabbit's
-bundled Biome.
+completion once those dependencies are installed.
 
 Tier 2 (managed blocks):
 
@@ -549,151 +545,6 @@ load its workflow definition from the default branch rather than from the tag.
 A root `renovate-config.json` change enters fleet validation but does not
 publish until a maintainer dispatches the release workflow. Organization tag
 rules should reserve `v*` creation and deletion for the release App.
-
-## CodeRabbit review and merge policy
-
-Public consumers opt in with `params.coderabbit: true`. Fleet distributes
-`fleet/files/coderabbit.config.ts` as a whole file and protects it from consumer
-edits. YAML configuration takes precedence over TypeScript, so fleet also rejects
-the four YAML configuration filenames rather than leaving a policy override in
-place. Private consumers do not adopt this config. That does not restrict the
-GitHub App's access: its installation must separately select only the intended
-public repositories. An installation on All repositories includes private and
-future repositories regardless of this fleet flag.
-
-CodeRabbit reviews every author's non-draft PRs and new commits without an
-automatic pause. It uses the Chill profile, puts summaries in the walkthrough,
-reports review errors as failures, and retains actionable prompts for coding
-agents. Docstring coverage, ancillary summary suggestions and code-writing
-finishing touches are disabled. CodeRabbit's Autopilot preview, offered as a PR
-comment checkbox, is outside this configuration; do not start it. DCO, the fleet
-guard, the sync render check and cask head binding contain its commits, but a
-signed-off commit to repo-owned code would still reach review. The file is
-self-contained rather than inheriting
-organization defaults; global overrides still need a separate hosted check.
-`chat.allow_non_org_members: false` restricts comment commands to organization
-members without excluding outside contributors from automatic reviews.
-
-Formal APPROVE / REQUEST_CHANGES decisions additionally require membership in
-`formalReviewRepos`, initially only `homebrew-tap`. Other adopters receive
-reviews without formal decisions, even for maintainer and recognized bot PRs.
-Expand that list through fleet canon separately from config adoption; do not
-rely on how a REQUEST_CHANGES review behaves with zero required approvals.
-Within the selected repositories, default-branch PRs must match this author and
-change policy (repository-specific paths remain dormant until enrollment):
-
-- `p-linnane`.
-- `dependabot[bot]` and `renovate[bot]` on their respective update branches,
-  when at least one changed file is not a lockfile.
-- `starhaven-bot[bot]` fleet-sync branches with a CalVer suffix; the required
-  fleet guard remains responsible for authenticating the released render.
-- Hub fleet-release branches changing only `fleet/VERSION`.
-- Tap bump branches changing only the corresponding cask.
-- macOSdb scan/rescan branches changing only catalog JSON.
-- Wrapper version bumps changing only `action.yml` and `README.md`.
-
-Bot eligibility requires complete, nonempty changed-file metadata. Unexpected
-authors, branches, mixed file sets, drafts and unresolved metadata receive no
-automatic approval under this configuration. This is review routing, not an audit
-of upstream package contents or a replacement for CI and provenance checks.
-CodeRabbit's default path filters skip lockfiles, `*.json`, `*.svg`, `dist/**`
-and other generated or binary paths, and it can still approve a PR whose files
-it skipped. Adding the exact default pattern `**/*.json` to `path_filters`
-lifted the JSON exclusion but, in hosted reviews, also limited review to JSON
-files, so the config uses exclusions only. JSON manifests, npm script policy,
-Renovate presets and audited-action catalogs therefore get no CodeRabbit
-content review. macOSdb's generated catalog under `data/` is excluded
-explicitly; catalog decisions rest on bot, branch and path provenance, not
-content review. A PR that changes only skipped files gets no content review.
-
-GitHub owns merge enforcement for separately enrolled repositories: one approval,
-stale-review dismissal, approval after the latest push, resolved review threads,
-and all existing required checks. An organization administrator may explicitly
-bypass the separate public-review ruleset through a PR. Required CI, DCO, fleet
-validation and PR creation remain outside that bypass. Record the reason for an
-exceptional merge in the PR.
-
-The automatic-approval allowlist is not an independent authorization boundary.
-CodeRabbit can read configuration from a PR's head. The trusted consumer fleet
-guard rejects edits to managed reviewer configuration, but the org-required guard
-skips the hub entirely. The hub's own guard runs from its PR-controlled workflows,
-so changes to its configuration require maintainer review. Verify a fork PR's
-effective configuration and guard result before enabling any merge rule. Do not infer a maintainer's review solely from a
-CodeRabbit APPROVED state. Author-forced `approve` and `resolve` commands are
-disabled, while eligible non-author organization members can still issue them.
-Authors can also resolve GitHub review threads; automatic approval may follow
-when the other review conditions are met.
-
-Keep one merge executor for each existing PR category. Fleet sync and catalog
-publication retain GitHub auto-merge. Product releases retain their bounded,
-synchronous cask merge waiters, exact-head binding and single-cask validation.
-The waiters require a mergeable GitHub policy state as well as passing checks,
-so pending approval keeps them waiting. A timeout leaves the PR open for
-recovery; it must not become an approval bypass. The macOSdb prepare jobs must
-also reject an earlier open catalog publication before producing another index.
-Dependency and wrapper PRs retain their existing manual merge policy even when
-CodeRabbit approves them.
-
-CodeRabbit Triage can merge maintainer-authored PRs with a separate hosted rule:
-select only repositories with a verified review gate; add the repository filter
-`PR labels: has all of: automerge`; require PR author `p-linnane`, PR state Open,
-CodeRabbit review status Reviewed, Review state Approved, and Workflow Ready to
-merge in one AND group; choose Squash. Apply the label only after authorization
-to merge the proposed change and its resulting release or deployment. Opening a
-PR alone does not grant that authorization. Remove the label before revisions
-outside the approved scope. The label persists across pushes; GitHub does not
-bind it to the authorized commit. The shared agent instructions carry the rule
-to remove it, which remains an operator convention.
-
-Do not use All repositories or add bot authors already served by existing merge
-workflows. Preview matches and initially enable only future PRs. Triage rules
-are not part of `.coderabbit.config.ts`; the label filter and plan eligibility are
-documented in [CodeRabbit's Triage rules reference](https://docs.coderabbit.ai/triage/rules).
-Confirm Triage is available under the existing OSS entitlement before enabling
-it. If unavailable, explicitly arm GitHub auto-merge for each authorized maintainer
-PR; keep the existing bot executors and synchronous cask waiters.
-
-Roll out in dependency order:
-
-1. Verify the GitHub App installation selects only the intended public
-   repositories. Review the concrete selection before changing hosted access.
-   Merge fleet canon, release it, and let sync deliver the reviewer policy to
-   opted-in public repositories, including hub self-sync. Formal decisions start
-   only in `homebrew-tap`; other adopters remain review-only. Watch the initial
-   batch for CodeRabbit rate limits and retry incomplete reviews as needed.
-   For macOSdb, deliver both current and candidate workflow acceptance digests
-   before merging the publication guard; retire the old digests in a subsequent
-   fleet release. Recompute candidate digests if any workflow bytes change.
-2. Verify the resolved CodeRabbit configuration, absence of conflicting global
-   overrides, app permissions, and completed approvals in the pilot. Verify
-   other adopters get reviews without formal decisions, outside-contributor
-   reviews still run, and nonmember commands are denied. Confirm a mixed PR's
-   walkthrough lists its source files as reviewed, not "included by none".
-3. Enroll only `homebrew-tap` in the separate GitHub review ruleset as a pilot.
-   Keep baseline PR and required-check rules in place. With that gate active,
-   verify a bot's approval counts, a new commit dismisses it and gets reviewed
-   again, a base update recovers correctly, and required CI still blocks merging.
-   The tap's own rules also apply; re-test the administrator review override on
-   the first enrolled repository without overlapping repository PR rules.
-   Local tests cannot establish these hosted facts.
-4. Enable the labeled maintainer Triage rule only for the verified pilot. Confirm
-   an unlabeled PR stays open and a labeled, approved, ready PR merges. Test fork
-   configuration behavior and current-head review evidence before expansion.
-   For each new repository, release/sync its formal-review opt-in, verify its
-   approvals, then enroll its GitHub review gate and validate before adding
-   Triage. Land the macOSdb publication guard before enabling formal decisions
-   there; its first hosted run must confirm the runner's `gh api --slurp` support.
-
-To remove a repository, first disable its Triage enrollment and inspect existing
-GitHub auto-merge requests and queued merges; pausing Triage does not cancel work
-already handed off. Remove its separate GitHub review requirement and verify the
-effective rules before disabling formal decisions, removing `params.coderabbit`,
-restricting app access, or making the repository private. Reconcile the GitHub
-App selection, fleet config adoption, formal-review list, GitHub review gate and
-hosted Triage scope explicitly.
-
-If reviewer service fails, use the explicit maintainer review override for a
-verified PR rather than weakening CI or granting a bot ruleset bypass.
 
 ## Sync Workflow
 

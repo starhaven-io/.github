@@ -2,7 +2,6 @@ schema: 1
 visibility: "public"
 license: "mit"
 params:
-  coderabbit: true
   renovate: true
   conclusion:
     workflow: ".github/workflows/ci.yml"
