@@ -230,20 +230,6 @@ class GuardRegressionsTest < Minitest::Test
     assert_sync_success(sync(repo, "--check"))
   end
 
-  def test_coderabbit_policy_is_retired_when_adoption_is_removed
-    repo = scenario("coderabbit-retirement")
-    config = fleet_config(repo)
-    config.fetch("params")["coderabbit"] = true
-    write_fleet_config(repo, config)
-    assert_sync_success(sync(repo))
-    assert_path_exists File.join(repo, ".coderabbit.config.ts")
-
-    config.fetch("params").delete("coderabbit")
-    write_fleet_config(repo, config)
-    assert_sync_success(sync(repo))
-    refute_path_exists File.join(repo, ".coderabbit.config.ts")
-  end
-
   def test_fixture_git_ignores_an_inherited_linked_worktree_git_dir
     outer = File.join(TMPDIR, "inherited-git-dir")
     linked = File.join(TMPDIR, "inherited-git-dir-worktree")

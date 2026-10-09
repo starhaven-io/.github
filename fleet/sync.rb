@@ -61,8 +61,6 @@ class FleetSync
     ".githooks/pre-push"
   ].freeze
 
-  CODERABBIT_YAML_FILES = %w[.coderabbit.yaml .coderabbit.yml coderabbit.yaml coderabbit.yml].freeze
-
   LICENSE_FILES = {
     "agpl" => "files/licenses/agpl",
     "mit" => "files/licenses/mit"
@@ -80,7 +78,6 @@ class FleetSync
   PARAM_KEYS = %w[
     astro-docs
     codecov
-    coderabbit
     codeql
     conclusion
     dependabot
@@ -300,7 +297,6 @@ class FleetSync
 
     validate_boolean(params, "astro-docs", "existing .fleet.yml params.astro-docs")
     validate_boolean(params, "codecov", "existing .fleet.yml params.codecov")
-    validate_boolean(params, "coderabbit", "existing .fleet.yml params.coderabbit")
     validate_boolean(params, "renovate", "existing .fleet.yml params.renovate")
     %w[pinprick-audit zizmor].each do |key|
       next unless params.key?(key)
@@ -548,7 +544,6 @@ class FleetSync
     reject_unknown_keys(params, PARAM_KEYS, ".fleet.yml params")
     validate_boolean(params, "astro-docs", ".fleet.yml params.astro-docs")
     validate_boolean(params, "codecov", ".fleet.yml params.codecov")
-    validate_boolean(params, "coderabbit", ".fleet.yml params.coderabbit")
     validate_dependabot(params["dependabot"]) if params.key?("dependabot")
     validate_npm_policy(params["npm-policy"]) if params.key?("npm-policy")
     validate_link_check(params["link-check"]) if params.key?("link-check")
@@ -1029,15 +1024,6 @@ class FleetSync
 
     params = config_params(config)
     write_file(".mcp.json", read_path(hub_path("files/mcp.json")), ".mcp.json") if params["astro-docs"]
-
-    if params["coderabbit"]
-      conflicting = CODERABBIT_YAML_FILES.select { |path| managed_path_present?(repo_path(path)) }
-      unless conflicting.empty?
-        raise FleetError, "CodeRabbit YAML overrides the managed TypeScript policy: #{conflicting.join(", ")}"
-      end
-
-      write_file(".coderabbit.config.ts", read_path(hub_path("files/coderabbit.config.ts")), ".coderabbit.config.ts")
-    end
 
     if params["codecov"]
       write_file(
@@ -1635,7 +1621,6 @@ class FleetSync
     files = [".fleet.yml", *TIER1_FILES.keys]
     files << "LICENSE" unless config_license(config) == "none"
     files << ".mcp.json" if params["astro-docs"]
-    files.push(".coderabbit.config.ts", *CODERABBIT_YAML_FILES) if params["coderabbit"]
     files << "scripts/upload-codecov.py" if params["codecov"]
     files << "scripts/check-npm-install-policy.mjs" if params["npm-policy"]
     files << ".github/workflows/fleet-guard.yml"
