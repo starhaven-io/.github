@@ -230,6 +230,37 @@ class GuardRegressionsTest < Minitest::Test
     assert_sync_success(sync(repo, "--check"))
   end
 
+  def test_guard_reads_base_blocks_as_utf8_under_ascii_locales
+    repo = scenario("guard-utf8-base-blocks")
+    %w[README.md AGENTS.md].each do |name|
+      File.open(File.join(repo, name), "a:UTF-8") { |file| file.write("\nCafé documentation.\n") }
+    end
+    commit_all(repo, "add Unicode repo-owned documentation")
+    base = git(repo, "rev-parse", "HEAD").stdout.strip
+    %w[README.md AGENTS.md].each do |name|
+      File.open(File.join(repo, name), "a:UTF-8") { |file| file.write("\nMore café documentation.\n") }
+    end
+    commit_all(repo, "edit repo-owned Unicode documentation")
+
+    %w[C POSIX].each do |locale|
+      env = { "LC_ALL" => locale, "LANG" => nil, "LC_CTYPE" => nil }
+      assert_sync_success(run_command_env(env, repo, "ruby", "-e",
+                                          "abort unless Encoding.default_external == Encoding::US_ASCII"))
+      assert_sync_success(run_command_env(env, repo, *SYNC, "--hub-root", ".", "--repo-root", ".",
+                                          "--repo-name", ".github", "--guard", base))
+    end
+
+    agents = File.join(repo, "AGENTS.md")
+    File.write(agents, File.read(agents).sub("## Commit and PR conventions", "## Changed conventions"))
+    commit_all(repo, "edit protected block")
+    %w[C POSIX].each do |locale|
+      result = run_command_env({ "LC_ALL" => locale, "LANG" => nil, "LC_CTYPE" => nil }, repo,
+                               *SYNC, "--hub-root", ".", "--repo-root", ".", "--repo-name", ".github", "--guard", base)
+      assert_rejects([locale, result, "AGENTS.md:commit-and-pr-conventions"])
+      refute_includes result.output, "invalid byte sequence"
+    end
+  end
+
   def test_fixture_git_ignores_an_inherited_linked_worktree_git_dir
     outer = File.join(TMPDIR, "inherited-git-dir")
     linked = File.join(TMPDIR, "inherited-git-dir-worktree")
