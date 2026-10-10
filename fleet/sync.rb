@@ -1829,7 +1829,7 @@ class FleetSync
     )
     return nil unless status.success?
 
-    stdout
+    stdout.force_encoding(Encoding::UTF_8)
   end
 
   def guard_base_reusable_pins(path)
