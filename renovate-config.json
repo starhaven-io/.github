@@ -27,6 +27,16 @@
         "digest"
       ],
       "enabled": false
+    },
+    {
+      "description": "ghcr.io reports no release timestamps, so the age gate would hold zizmor image updates indefinitely.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/zizmorcore/zizmor"
+      ],
+      "minimumReleaseAgeBehaviour": "timestamp-optional"
     }
   ],
   "semanticCommits": "enabled",

@@ -527,6 +527,8 @@ while publication requires the real authenticated tag.
 Consumer Dependabot and the shared Renovate preset set a seven-day age gate
 for eligible third-party updates. The Dependabot template exempts same-organization
 actions and `ruby/setup-ruby`, which must recognize each requested Ruby version.
+The preset exempts the zizmor image, whose ghcr.io registry reports no release
+timestamps for the gate to measure.
 Fleet workflow pins instead cross the immutable fleet release boundary;
 Dependabot never writes them.
 
