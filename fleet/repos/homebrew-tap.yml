@@ -8,6 +8,9 @@ params:
     audit-jobs: ["pinprick"]
     pinprick-jobs: ["pinprick"]
   dependabot:
+    - package-ecosystem: "bundler"
+      group: "bundler-dependencies"
+      directory: "/"
     - package-ecosystem: "github-actions"
       group: "github-actions"
       directory: "/"
@@ -18,8 +21,8 @@ params:
     schedule: "0 14 * * 1"
     concurrency-group: "link-check"
   codeql:
-    languages: ["actions"]
-    paths: [".github/workflows/**"]
+    languages: ["actions", "ruby"]
+    paths: [".github/workflows/**", "scripts/**", "test/**", "Casks/**", "Gemfile", "Gemfile.lock", ".ruby-version"]
     runner: "ubuntu-slim"
     timeout-minutes: 30
   pinprick-audit:
