@@ -41,6 +41,8 @@ params:
     paths:
       - ".github/workflows/**"
       - "app/**"
+      - "bin/**"
+      - "scripts/**"
       - "config/**"
       - "lib/**"
       - "research/**"
