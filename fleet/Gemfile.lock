@@ -37,8 +37,9 @@ GEM
     unicode-emoji (4.2.0)
 
 PLATFORMS
-  arm64-darwin-25
-  ruby
+  aarch64-linux-gnu
+  arm64-darwin
+  x86_64-linux-gnu
 
 DEPENDENCIES
   minitest
