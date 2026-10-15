@@ -777,23 +777,58 @@ class FleetSync
   def validate_workflow_acceptances(entries, path)
     raise FleetError, "#{path} must be an array" unless entries.is_a?(Array)
 
-    fields = %w[workflow workflow-sha256 category severity description command reason]
+    fields = %w[workflow category severity description command reason]
+    digest_fields = %w[workflow-sha256 workflow-context-sha256]
     entries.each_with_index do |entry, index|
       item_path = "#{path}[#{index}]"
       raise FleetError, "#{item_path} must be a mapping" unless entry.is_a?(Hash)
 
-      reject_unknown_keys(entry, fields, item_path)
+      reject_unknown_keys(entry, fields + digest_fields + %w[ignore-action-revisions], item_path)
       fields.each { |field| validate_plain_string(entry[field], "#{item_path}.#{field}") }
       unless entry.fetch("workflow").match?(WORKFLOW_FILE_PATTERN)
         raise FleetError, "#{item_path}.workflow must be one literal workflow path"
       end
-      unless entry.fetch("workflow-sha256").match?(/\A[0-9a-f]{64}\z/)
-        raise FleetError, "#{item_path}.workflow-sha256 must be a lowercase SHA-256"
-      end
+
+      validate_workflow_digest(entry, digest_fields, item_path)
       unless %w[low medium high].include?(entry.fetch("severity"))
         raise FleetError, "#{item_path}.severity must be low, medium, or high"
       end
     end
+  end
+
+  def validate_workflow_digest(entry, fields, path)
+    present = fields.select { |field| entry.key?(field) }
+    raise FleetError, "#{path} requires exactly one workflow digest" unless present.length == 1
+
+    field = present.first
+    validate_plain_string(entry[field], "#{path}.#{field}")
+    unless entry.fetch(field).match?(/\A[0-9a-f]{64}\z/)
+      raise FleetError, "#{path}.#{field} must be a lowercase SHA-256"
+    end
+
+    if field == "workflow-sha256"
+      if entry.key?("ignore-action-revisions")
+        raise FleetError, "#{path}.ignore-action-revisions requires workflow-context-sha256"
+      end
+
+      return
+    end
+
+    key = "ignore-action-revisions"
+    raise FleetError, "#{path}.#{key} is required" unless entry.key?(key)
+
+    validate_string_array(entry, key, "#{path}.#{key}", nonempty: true)
+    actions = entry.fetch(key)
+    raise FleetError, "#{path}.#{key} must contain unique identities" unless actions.uniq == actions
+
+    actions.each { |action| validate_action_identity(action, "#{path}.#{key}") }
+  end
+
+  def validate_action_identity(action, path)
+    return if action.match?(%r{\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\z}) &&
+              literal_segments?(action)
+
+    raise FleetError, "#{path} must name one owner/repo[/subpath] action"
   end
 
   # pinprick matches an accepted action finding by the action's exact
@@ -808,10 +843,7 @@ class FleetSync
 
       reject_unknown_keys(entry, fields, item_path)
       fields.each { |field| validate_plain_string(entry[field], "#{item_path}.#{field}") }
-      unless entry.fetch("action").match?(%r{\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\z}) &&
-             literal_segments?(entry.fetch("action"))
-        raise FleetError, "#{item_path}.action must name one owner/repo[/subpath] action"
-      end
+      validate_action_identity(entry.fetch("action"), "#{item_path}.action")
       unless entry.fetch("path").match?(%r{\A[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\z}) &&
              literal_segments?(entry.fetch("path"))
         raise FleetError, "#{item_path}.path must be one literal file path in the action repository"
