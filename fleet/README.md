@@ -114,9 +114,26 @@ tree.
 `.pinprick.toml`. Each acceptance names one workflow path and SHA-256, category,
 severity, description, command, and review reason. It cannot accept third-party
 action findings or incomplete source coverage. Pinprick reports accepted
-findings explicitly, and any workflow byte change requires renewed review in
-canon. Keep the key with an empty array when retiring the last entry so the
-configuration remains managed while older releases can still load it.
+findings explicitly, and byte-exact acceptances require renewed review in
+canon after any workflow byte change. Keep the key with an empty array when
+retiring the last entry so the configuration remains managed while older
+releases can still load it.
+
+To let reviewed actions' routine pin updates through, an entry may use
+`workflow-context-sha256` with a nonempty `ignore-action-revisions` array of
+unique, literal `owner/repo[/subpath]` identities in place of
+`workflow-sha256`. Generate the digest with `pinprick workflow-fingerprint`,
+repeating `--ignore-action-revision` for each listed action. The digest covers
+the action list and every workflow byte except those actions' full SHA pins
+and full version-only comments, so any other workflow change still requires
+renewed review. Updated actions are still audited, and incomplete coverage
+still fails. The renderer rejects entries with both or neither digest and
+broad or malformed action scopes.
+
+Context entries require pinprick 0.30.0 or later, the default in
+`pinprick-action` v0.6.10. Adopt them in canon only in a release whose reusable
+audit runs a supporting engine: older engines reject the new fields and fall
+back to default policy.
 
 ### Accepted action findings
 

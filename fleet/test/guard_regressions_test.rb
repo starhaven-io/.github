@@ -1032,6 +1032,58 @@ class GuardRegressionsTest < Minitest::Test
     "reason" => "installs from an unversioned upstream by design"
   }.freeze
 
+  CONTEXT_ACCEPTANCE = {
+    "workflow" => ".github/workflows/scan.yml",
+    "workflow-context-sha256" => "a" * 64,
+    "ignore-action-revisions" => %w[actions/checkout actions/cache/restore],
+    "category" => "shell_fetch",
+    "severity" => "low",
+    "description" => "runtime archive download",
+    "command" => 'curl -o "$ARCHIVE" "$URL"',
+    "reason" => "Reviewed archive input; action updates are independently audited."
+  }.freeze
+
+  def test_renders_context_acceptances_and_protects_their_action_scope
+    repo = scenario("audit-policy-context-acceptance")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("pinprick-audit")["accept-workflow-findings"] = [CONTEXT_ACCEPTANCE]
+    write_fleet_config(repo, config)
+    assert_sync_success(sync(repo))
+
+    policy = File.read(File.join(repo, ".pinprick.toml"))
+    CONTEXT_ACCEPTANCE.each { |key, value| assert_includes policy, "#{key} = #{JSON.generate(value)}\n" }
+    refute_includes policy, "workflow-sha256 ="
+    assert_sync_success(sync(repo, "--check"))
+
+    commit_all(repo, "adopt workflow context acceptance")
+    File.write(File.join(repo, ".pinprick.toml"), policy.sub("actions/cache/restore", "actions/*"))
+    commit_all(repo, "broaden ignored revisions")
+    assert_rejects(["context acceptance", consumer_guard(repo), ".pinprick.toml is hub-owned audit policy"])
+  end
+
+  def test_rejects_ambiguous_or_broad_context_acceptances
+    changes = [
+      { "workflow-sha256" => "b" * 64 }, { "workflow-context-sha256" => "latest" },
+      { "workflow-context-sha256" => "A" * 64 }, { "ignore-action-revisions" => [] },
+      { "ignore-action-revisions" => "actions/checkout" }, { "ignore-action-revisions" => [nil] },
+      { "ignore-action-revisions" => %w[actions/checkout actions/checkout] },
+      { "ignore-action-revisions" => ["actions/*"] }, { "ignore-action-revisions" => ["actions/../checkout"] },
+      { "ignore-action-revisions" => ["actions/checkout@main"] }, { "ignore-action-revisions" => ["./local"] }
+    ]
+    entries = changes.map { |change| CONTEXT_ACCEPTANCE.merge(change) }
+    entries << CONTEXT_ACCEPTANCE.except("ignore-action-revisions")
+    entries << CONTEXT_ACCEPTANCE.except("workflow-context-sha256")
+    entries << CONTEXT_ACCEPTANCE.except("workflow-context-sha256")
+                                 .merge("workflow-sha256" => "b" * 64)
+    entries.each_with_index do |entry, index|
+      repo = scenario("invalid-context-acceptance-#{index}")
+      config = fleet_config(repo)
+      config.fetch("params").fetch("pinprick-audit")["accept-workflow-findings"] = [entry]
+      write_fleet_config(repo, config)
+      assert_rejects(["invalid context acceptance", sync(repo), "accept-workflow-findings"])
+    end
+  end
+
   def test_renders_action_acceptances_as_hub_owned_policy
     repo = scenario("audit-policy-action-acceptance")
     config = fleet_config(repo)
