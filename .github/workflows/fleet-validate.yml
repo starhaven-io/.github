@@ -62,7 +62,7 @@ jobs:
 
       - name: Audit hub workflows
         env:
-          ZIZMOR_IMAGE: "ghcr.io/zizmorcore/zizmor:1.31.0@sha256:5a91180aefd2c72e585a155ee15938ecc2911b64e7fade998bf79fbd16a07856"
+          ZIZMOR_IMAGE: "ghcr.io/zizmorcore/zizmor:1.31.1@sha256:42d409dbb851d4c5d35a058cf042b828bea1e3f2884378c526eb0974780e18d9"
         run: |
           docker run --rm --network none \
             --volume "${GITHUB_WORKSPACE}:/workspace:ro" \
@@ -191,7 +191,7 @@ jobs:
         working-directory: repo
         env:
           REPO_NAME: ${{ matrix.repo }}
-          ZIZMOR_IMAGE: "ghcr.io/zizmorcore/zizmor:1.31.0@sha256:5a91180aefd2c72e585a155ee15938ecc2911b64e7fade998bf79fbd16a07856"
+          ZIZMOR_IMAGE: "ghcr.io/zizmorcore/zizmor:1.31.1@sha256:42d409dbb851d4c5d35a058cf042b828bea1e3f2884378c526eb0974780e18d9"
         run: |
           workflow_manifest="${RUNNER_TEMP}/fleet-managed-workflows"
           ruby ../hub/fleet/sync.rb \
