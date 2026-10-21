@@ -8,6 +8,13 @@ require "tmpdir"
 class NpmInstallPolicyTest < Minitest::Test
   CHECKER = File.expand_path("../files/check-npm-install-policy.mjs", __dir__)
 
+  def test_validator_policy_covers_locked_install_scripts
+    output, status = Open3.capture2e("node", CHECKER, File.expand_path("../validator", __dir__))
+
+    assert status.success?, output
+    assert_includes output, "npm install-script policy covers"
+  end
+
   def test_accepts_exact_approval_and_name_wide_denial
     [{ "compiler@1.2.3" => true }, { "compiler" => false }].each do |policy|
       output, status = check(policy: policy)
