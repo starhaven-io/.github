@@ -4,8 +4,17 @@
   "version": "0.0.0",
   "description": "Locked JavaScript tooling used only by fleet validation",
   "license": "MIT",
+  "engines": {
+    "node": "^24.15.0"
+  },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "renovate": "44.155.1"
+  },
+  "allowScripts": {
+    "core-js-pure": false,
+    "dtrace-provider": false,
+    "protobufjs": false,
+    "re2": false
   }
 }

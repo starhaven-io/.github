@@ -48,6 +48,27 @@ The locked Biome executable remains in `fleet/validator/`, and the config's
 `$schema` points at that package's schema, so editors get validation and
 completion once those dependencies are installed.
 
+The validator uses Node 24 because the locked Renovate package supports that
+major. Its `engines.node` requirement also covers the locked optional native
+toolchain. Both validator CI jobs select Node 24; use a compatible Node 24
+runtime locally while keeping Node 26 for the other fleet npm projects.
+Revisit this exception when the locked Renovate package supports Node 26 and
+the validator checks pass on that major.
+
+From the hub root, install the locked validator dependencies with:
+
+```sh
+npm ci --strict-allow-scripts --no-audit --no-fund --prefix fleet/validator
+```
+
+The validator explicitly denies the `protobufjs`, `core-js-pure`,
+`dtrace-provider`, and `re2` install scripts. CI installs with
+`--ignore-scripts`. The fleet tests check that `allowScripts` covers every
+locked package with an install script. RE2 is disabled, so Renovate falls back
+to JavaScript regular expressions; validation can accept patterns that RE2 would
+reject. Enabling native RE2 is a separate change to the validator's behavior and
+install policy.
+
 Tier 2 (managed blocks):
 
 | Block | Host file | Scope |
