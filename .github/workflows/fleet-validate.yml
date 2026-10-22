@@ -36,7 +36,24 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
+          check-latest: true
           package-manager-cache: false
+
+      # 24.22.1 is the lowest Node 24 release with the October 2026 security
+      # fixes. A failed manifest lookup can reuse an older cached runtime.
+      - name: Verify Node runtime
+        run: |
+          node --version
+          node --input-type=commonjs <<'NODE'
+          const assert = require("node:assert/strict");
+          const version = process.versions.node;
+          const parts = version.split(".").map(Number);
+          assert(parts.length === 3 && parts.every(part => Number.isSafeInteger(part) && part >= 0)
+            && parts.join(".") === version, `Expected a stable Node version, got ${version}`);
+          const [major, minor, patch] = parts;
+          assert(major === 24 && (minor > 22 || (minor === 22 && patch >= 1)),
+            `Expected Node 24 >= 24.22.1, got ${version}`);
+          NODE
 
       - name: Install Renovate validator
         env:
@@ -161,7 +178,25 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24
+          check-latest: true
           package-manager-cache: false
+
+      # 24.22.1 is the lowest Node 24 release with the October 2026 security
+      # fixes. A failed manifest lookup can reuse an older cached runtime.
+      - name: Verify Node runtime
+        if: steps.clone.outcome == 'success' && matrix.renovate
+        run: |
+          node --version
+          node --input-type=commonjs <<'NODE'
+          const assert = require("node:assert/strict");
+          const version = process.versions.node;
+          const parts = version.split(".").map(Number);
+          assert(parts.length === 3 && parts.every(part => Number.isSafeInteger(part) && part >= 0)
+            && parts.join(".") === version, `Expected a stable Node version, got ${version}`);
+          const [major, minor, patch] = parts;
+          assert(major === 24 && (minor > 22 || (minor === 22 && patch >= 1)),
+            `Expected Node 24 >= 24.22.1, got ${version}`);
+          NODE
 
       - name: Install Renovate validator
         if: steps.clone.outcome == 'success' && matrix.renovate
