@@ -2,6 +2,11 @@ schema: 1
 visibility: "public"
 license: "mit"
 params:
+  ruby-runtime:
+    version-file: "fleet/.ruby-version"
+    lock-files: ["fleet/Gemfile.lock"]
+    require-lock-version: true
+    update-companions: true
   renovate: true
   conclusion:
     workflow: ".github/workflows/conclusion.yml"
