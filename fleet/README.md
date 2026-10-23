@@ -504,6 +504,16 @@ and Cargo configuration. Pinprick also watches the audit catalog consumed by
 `fleet/repos/` and reach consumers through release/sync; validate the first
 hosted Rust extraction after delivery.
 
+## Ruby runtime companions
+
+Canonical `params.ruby-runtime` declares repository-owned runtime companions.
+The required trusted-main guard validates them for every actor in consumers
+covered by its org ruleset. Other declaring repositories must run an equivalent
+required check of their own; the hub checks its runtime in fleet tests.
+Read [Complete Ruby runtime updates](ruby-runtime.md)
+for the complete normal update path, reproduced extraction limitation, and
+delivery requirements. No new publisher is deployed.
+
 ## Versions, Pins, and Releases
 
 Fleet releases are tagged with CalVer: `vYYYY.MM.DD.N`, N starting at 1 each

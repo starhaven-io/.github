@@ -7,6 +7,7 @@ require "tmpdir"
 require "yaml"
 require "minitest/autorun"
 require_relative "../version"
+require_relative "../ruby_runtime"
 require_relative "isolated_git_env"
 
 # Renders every fleet/repos/*.yml into a synthetic consumer skeleton and
@@ -285,6 +286,21 @@ class GoldenRenderTest < Minitest::Test
                  "renovate preset must pin the current fleet release for #{name}"
     assert_equal ["mergeConfidence:all-badges"], rendered.fetch("ignorePresets"),
                  "renovate stub must retain the Merge Confidence opt-out for #{name}"
+
+    runtime = params(repo_config(name))["ruby-runtime"]
+    if runtime && runtime["update-companions"]
+      rule = rendered.fetch("packageRules").fetch(0)
+      assert_equal ["ruby-version"], rule.fetch("matchManagers")
+      assert_equal [runtime.fetch("version-file")], rule.fetch("matchFileNames")
+      assert_equal false, rule.fetch("enabled")
+      companions = rendered.fetch("packageRules").fetch(1)
+      assert_equal RubyRuntime.paths(runtime), companions.fetch("matchFileNames")
+      assert_equal true, companions.fetch("enabled")
+      assert_equal "Ruby runtime", companions.fetch("groupName")
+      assert_equal "ruby-{{{newMajor}}}.x", companions.fetch("group").fetch("branchTopic")
+    else
+      refute rendered.key?("packageRules"), "single-file runtimes must retain their existing update policy"
+    end
 
     validator = ENV.fetch("FLEET_RENOVATE_VALIDATOR", "")
     return if validator.empty?

@@ -2,6 +2,10 @@ schema: 1
 visibility: "private"
 license: "none"
 params:
+  ruby-runtime:
+    version-file: ".ruby-version"
+    checksum-file: ".ruby-version.sha256"
+    update-companions: true
   renovate: true
   dependabot:
     - package-ecosystem: "github-actions"
