@@ -12,7 +12,7 @@ module RequiredGuardWorkflow
   ROOT = File.expand_path("../..", __dir__)
   WORKFLOW = File.join(ROOT, ".github/workflows/fleet-guard-required.yml")
   SANDBOX = Dir.mktmpdir("fleet-guard-required-")
-  CHECKOUT_GATE = "steps.mode.outputs.mode != 'exempt'"
+  CHECKOUT_GATE = nil
   BOT = "starhaven-bot[bot]"
 
   module_function
@@ -105,7 +105,7 @@ class FleetGuardRequiredWorkflowTest < Minitest::Test
     end
   end
 
-  def test_every_later_step_waits_on_the_mode_decision
+  def test_runtime_consistency_is_not_actor_exempt
     mode_step = @steps.first
     assert_equal "mode", mode_step.fetch("id")
     refute mode_step.key?("if")
@@ -116,6 +116,7 @@ class FleetGuardRequiredWorkflowTest < Minitest::Test
         "Checkout consumer" => CHECKOUT_GATE,
         "Checkout fleet hub" => CHECKOUT_GATE,
         "Set up Ruby" => CHECKOUT_GATE,
+        "Check Ruby runtime companions" => nil,
         "Guard fleet-managed surfaces" => "steps.mode.outputs.mode == 'guard'",
         "Verify fleet sync pull request" => "steps.mode.outputs.mode == 'sync'"
       },

@@ -98,8 +98,9 @@ Top level:
 - `fleet-guard.yml`: this repo's own rendered guard caller.
 - `dco-required.yml`: run from `@main` by the org DCO ruleset against every
   pull request; validates sign-offs independently of the pull-request tree.
-- `fleet-guard-required.yml`: run from `@main` by an org ruleset against
-  consumer PRs; skips the hub itself, exempts only Dependabot, and requires
+- `fleet-guard-required.yml`: run from `@main` in consumer repositories where
+  the org ruleset requires it; skips the hub itself and checks every
+  actor, exempts Dependabot only from the managed-surface guard, and requires
   sync-bot `fleet-sync-*` PRs to match the authenticated release render.
 - `fleet-sync.yml`: runs from trusted `main`, authenticates and executes the
   tagged renderer and canon, and opens verified sync PRs using App credentials
@@ -142,6 +143,19 @@ required SHA-256 and timestamp, and exclusion of draft/prerelease releases.
 Checksum-only updates are disabled for this datasource: a changed archive under
 an existing version requires investigation, and the original release timestamp
 cannot establish the replacement archive's age.
+
+Paired Ruby runtimes opt in through canonical `params.ruby-runtime` and scoped
+rendered package rules. The exact builder datasource updates version, checksum
+and existing lock metadata under one dependency identity, retaining the normal
+cooldown and the established Ruby branch name. The required trusted-main guard
+checks consistency for every actor in consumers covered by its org ruleset.
+Other declaring repositories must run an equivalent required check of their
+own. Read `fleet/ruby-runtime.md` for the tested
+boundary: malformed repository companions can still produce an incomplete bot
+branch, which the consistency gate rejects. Do not call grouping alone atomic,
+add Bundler ownership, or enable companion rules with a release that lacks the
+companion managers. Leave the hub's own rendered config to release/sync when
+changing its canonical runtime declaration.
 
 Consumers opt in explicitly with
 `local>starhaven-io/.github:renovate-config#<fleet-release>`. Renovate resolves

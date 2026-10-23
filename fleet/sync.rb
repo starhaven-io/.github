@@ -10,6 +10,7 @@ require "yaml"
 require_relative "version"
 require_relative "codecov_policy"
 require_relative "conclusion_policy"
+require_relative "ruby_runtime"
 
 class FleetError < StandardError; end
 
@@ -86,6 +87,7 @@ class FleetSync
     pinprick-audit
     readme
     renovate
+    ruby-runtime
     zizmor
   ].freeze
 
@@ -553,6 +555,13 @@ class FleetSync
     validate_zizmor(params["zizmor"]) if params.key?("zizmor")
     validate_readme(params["readme"]) if params.key?("readme")
     validate_boolean(params, "renovate", ".fleet.yml params.renovate")
+    validate_ruby_runtime(params["ruby-runtime"]) if params.key?("ruby-runtime")
+  end
+
+  def validate_ruby_runtime(config)
+    RubyRuntime.validate_config!(config)
+  rescue RubyRuntime::Error => e
+    raise FleetError, e.message
   end
 
   def validate_exceptions(exceptions)
@@ -1202,7 +1211,7 @@ class FleetSync
       )
     end
 
-    render_renovate if params["renovate"]
+    render_renovate(params["ruby-runtime"]) if params["renovate"]
     render_zizmor(params.fetch("zizmor", {})) unless exception?(config, "zizmor")
     render_pinprick_audit(params.fetch("pinprick-audit", {})) unless exception?(config, "pinprick-audit")
     if managed_pinprick_config?(config)
@@ -1228,10 +1237,10 @@ class FleetSync
     )
   end
 
-  def render_renovate
+  def render_renovate(runtime = nil)
     write_file(
       "renovate.json",
-      render_template("renovate.json.erb", fleet_version: fleet_version),
+      render_template("renovate.json.erb", fleet_version: fleet_version, ruby_runtime: runtime),
       "renovate.json"
     )
   end

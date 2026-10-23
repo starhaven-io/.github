@@ -1,0 +1,48 @@
+{
+  "enabledManagers": [
+    "custom.regex"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "depNameTemplate": "Ruby",
+      "packageNameTemplate": "ruby/ruby-builder",
+      "datasourceTemplate": "custom.ruby-builder-ubuntu",
+      "versioningTemplate": "semver",
+      "managerFilePatterns": [
+        "/^(?:fleet/)?\\.ruby-version$/"
+      ],
+      "matchStrings": [
+        "^(?<currentValue>\\d+\\.\\d+\\.\\d+)\\n$"
+      ]
+    },
+    {
+      "customType": "regex",
+      "depNameTemplate": "Ruby",
+      "packageNameTemplate": "ruby/ruby-builder",
+      "datasourceTemplate": "custom.ruby-builder-ubuntu",
+      "versioningTemplate": "semver",
+      "managerFilePatterns": [
+        "/^(?:fleet/)?\\.ruby-version\\.sha256$/"
+      ],
+      "matchStrings": [
+        "^(?<currentDigest>[a-f0-9]{64})  ruby-(?<currentValue>\\d+\\.\\d+\\.\\d+)-ubuntu-24\\.04-x64\\.tar\\.gz\\n$"
+      ],
+      "autoReplaceStringTemplate": "{{#if newDigest}}{{{newDigest}}}  ruby-{{{newValue}}}-ubuntu-24.04-x64.tar.gz\n{{else}}{{{replaceString}}}{{/if}}"
+    },
+    {
+      "customType": "regex",
+      "depNameTemplate": "Ruby",
+      "packageNameTemplate": "ruby/ruby-builder",
+      "datasourceTemplate": "custom.ruby-builder-ubuntu",
+      "versioningTemplate": "semver",
+      "managerFilePatterns": [
+        "/^(?:fleet/)?Gemfile\\.lock$/"
+      ],
+      "matchStrings": [
+        "(?:^|\\r?\\n)RUBY VERSION\\r?\\n {2,3}ruby (?<currentValue>\\d+\\.\\d+\\.\\d+)(?:p\\d+)?\\r?\\n"
+      ],
+      "autoReplaceStringTemplate": "{{{replace '[0-9]+[.][0-9]+[.][0-9]+(p[0-9]+)?' newValue replaceString}}}"
+    }
+  ]
+}

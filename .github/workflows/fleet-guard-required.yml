@@ -48,14 +48,12 @@ jobs:
           fi
 
       - name: Checkout consumer
-        if: steps.mode.outputs.mode != 'exempt'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Checkout fleet hub
-        if: steps.mode.outputs.mode != 'exempt'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: starhaven-io/.github
@@ -68,10 +66,14 @@ jobs:
           persist-credentials: false
 
       - name: Set up Ruby
-        if: steps.mode.outputs.mode != 'exempt'
         uses: ruby/setup-ruby@e1bd6146574da5e0795075b5319b300edb30c5b0 # v1.333.0
         with:
           working-directory: hub/fleet
+
+      - name: Check Ruby runtime companions
+        env:
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: ruby hub/fleet/ruby_runtime.rb check . "hub/fleet/repos/${REPO_NAME}.yml"
 
       - name: Guard fleet-managed surfaces
         if: steps.mode.outputs.mode == 'guard'
