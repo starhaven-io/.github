@@ -114,6 +114,7 @@ class FleetGuardRequiredWorkflowTest < Minitest::Test
     assert_equal(
       {
         "Checkout consumer" => CHECKOUT_GATE,
+        "Resolve the merged base" => "steps.mode.outputs.mode == 'guard'",
         "Checkout fleet hub" => CHECKOUT_GATE,
         "Set up Ruby" => CHECKOUT_GATE,
         "Check Ruby runtime companions" => nil,
@@ -142,10 +143,14 @@ class FleetGuardRequiredWorkflowTest < Minitest::Test
     )
   end
 
-  def test_guard_and_sync_inputs_come_from_the_pull_request_event
+  def test_guard_diffs_the_merged_base_and_sync_inputs_come_from_the_pull_request_event
+    assert_equal(
+      { "HEAD_SHA" => "${{ github.event.pull_request.head.sha }}" },
+      step("Resolve the merged base").fetch("env")
+    )
     assert_equal(
       {
-        "BASE_SHA" => "${{ github.event.pull_request.base.sha }}",
+        "BASE_SHA" => "${{ steps.base.outputs.sha }}",
         "REPO_NAME" => "${{ github.event.repository.name }}"
       },
       step("Guard fleet-managed surfaces").fetch("env")
@@ -204,6 +209,52 @@ class FleetGuardRequiredWorkflowTest < Minitest::Test
     output, status = guard(repo, repository: "starhaven-io/midden")
     refute status.success?
     assert_includes output, "--repo-name .github does not match guard repository starhaven-io/midden"
+  end
+
+  def test_resolves_the_merged_base_like_the_reusable_guard
+    reusable = YAML.safe_load_file(File.join(ROOT, ".github/workflows/reusable-fleet-guard.yml"), aliases: false)
+                   .fetch("jobs").fetch("guard").fetch("steps").find { |s| s["name"] == "Resolve the merged base" }
+    assert_equal reusable.fetch("run"), step("Resolve the merged base").fetch("run")
+
+    repo = pull_request("unmerged-checkout") do |path|
+      File.write(File.join(path, "profile/README.md"), "\nRepository-owned edit.\n", mode: "a")
+    end
+    output, status = merged_guard(repo, head: git(repo, "rev-parse", "HEAD").strip)
+    refute status.success?
+    assert_includes output, "fleet guard requires the pull request merge commit checkout"
+  end
+
+  def test_accepts_a_stale_pull_request_after_the_base_synced_fleet_config
+    repo, head, branched = stale_pull_request("stale-fleet-config") do |hub|
+      File.write(File.join(hub, "fleet/repos/.github.yml"), "# Changed after the branch was cut.\n", mode: "a")
+      commit_all(hub, "change canon")
+    end
+
+    output, status = guard(repo, base_sha: branched)
+    refute status.success?, "the fixture must reproduce the stale-base rejection"
+    assert_includes output, ".fleet.yml is hub-owned fleet configuration"
+    output, status = merged_guard(repo, head:)
+    assert status.success?, output
+  end
+
+  def test_accepts_a_stale_pull_request_while_the_next_release_sync_is_pending
+    repo, head, branched = stale_pull_request("stale-pending-release") { |hub| release(hub) }
+    release(File.join(repo, "hub"))
+
+    output, status = guard(repo, base_sha: branched)
+    refute status.success?, "the fixture must reproduce the stale-base rejection"
+    assert_includes output, "reusable pin mismatch"
+    output, status = merged_guard(repo, head:)
+    assert status.success?, output
+  end
+
+  def test_rejects_a_managed_file_edit_on_a_stale_pull_request
+    edit = ->(path) { File.write(File.join(path, ".editorconfig"), "\n[*.md]\nindent_size = 8\n", mode: "a") }
+    repo, head, = stale_pull_request("stale-managed-file", change: edit) { |hub| release(hub) }
+
+    output, status = merged_guard(repo, head:)
+    refute status.success?
+    assert_includes output, "managed surface change rejected (.editorconfig)"
   end
 
   def test_accepts_a_sync_pull_request_that_matches_the_release_render
@@ -423,6 +474,39 @@ class FleetGuardRequiredWorkflowTest < Minitest::Test
     [repo, base, git(repo, "rev-parse", "HEAD").strip]
   end
 
+  # Main receives a fleet sync after the pull request branches, so the event's
+  # base.sha predates the base that GitHub merges the head into.
+  def stale_pull_request(name, change: nil)
+    change ||= ->(path) { File.write(File.join(path, "profile/README.md"), "\nRepository-owned edit.\n", mode: "a") }
+    repo = pull_request(name) { |_path| nil }
+    branched = git(repo, "rev-parse", "HEAD").strip
+    yield File.join(repo, "hub")
+    _stdout, stderr, status = Open3.capture3(
+      ISOLATED_GIT_ENV.merge("GITHUB_REPOSITORY" => nil),
+      "ruby", "hub/fleet/sync.rb", "--hub-root", "hub", "--repo-root", ".", "--repo-name", ".github",
+      chdir: repo
+    )
+    raise "base sync fixture render failed:\n#{stderr}" unless status.success?
+
+    commit_all(repo, "chore(fleet): sync managed surfaces")
+    git(repo, "switch", "-q", "-c", "pull-request", branched)
+    change.call(repo)
+    commit_all(repo, "pull request")
+    head = git(repo, "rev-parse", "HEAD").strip
+    git(repo, "switch", "-q", "--detach", "main")
+    git(repo, "-c", "user.name=GitHub", "-c", "user.email=noreply@github.com", "-c", "commit.gpgsign=false",
+        "merge", "-q", "--no-ff", "-m", "Merge #{head} into main", head)
+    [repo, head, branched]
+  end
+
+  def release(hub)
+    version = File.read(File.join(hub, "fleet/VERSION")).strip.sub(/\d+\z/) { |serial| (serial.to_i + 1).to_s }
+    File.write(File.join(hub, "fleet/VERSION"), "#{version}\n")
+    commit_all(hub, "chore(fleet): release #{version}")
+    git(hub, "-c", "user.name=Required Guard Test", "-c", "user.email=guard@example.invalid",
+        "-c", "tag.gpgSign=false", "tag", "-a", version, "-m", "Fleet #{version}")
+  end
+
   def sync_branch(repo)
     "fleet-sync-#{File.read(File.join(repo, "hub/fleet/VERSION")).strip}"
   end
@@ -465,5 +549,19 @@ class FleetGuardRequiredWorkflowTest < Minitest::Test
       chdir: repo
     )
     [[stdout, stderr].join, status]
+  end
+
+  def merged_guard(repo, head:)
+    Dir.mktmpdir("resolve-", SANDBOX) do |directory|
+      output = File.join(directory, "github-output")
+      stdout, stderr, status = Open3.capture3(
+        ISOLATED_GIT_ENV.merge("HEAD_SHA" => head, "GITHUB_OUTPUT" => output),
+        "bash", "-euo", "pipefail", "-c", step("Resolve the merged base").fetch("run"),
+        chdir: repo
+      )
+      next [[stdout, stderr].join, status] unless status.success?
+
+      guard(repo, base_sha: File.readlines(output, chomp: true).to_h { |line| line.split("=", 2) }.fetch("sha"))
+    end
   end
 end

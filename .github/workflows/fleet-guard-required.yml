@@ -53,6 +53,23 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Resolve the merged base
+        id: base
+        if: steps.mode.outputs.mode == 'guard'
+        # The checkout is GitHub's test merge of the head into the current base.
+        # pull_request.base.sha is not refreshed when the base branch advances,
+        # so diffing against it would attribute a newer base, such as a fleet
+        # sync, to the pull request.
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          read -r -a parents <<< "$(git rev-list --parents -n 1 HEAD)"
+          if (( ${#parents[@]} != 3 )) || [[ -z "${HEAD_SHA}" || "${parents[2]}" != "${HEAD_SHA}" ]]; then
+            echo "::error::fleet guard requires the pull request merge commit checkout"
+            exit 1
+          fi
+          echo "sha=${parents[1]}" >> "${GITHUB_OUTPUT}"
+
       - name: Checkout fleet hub
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,7 +95,7 @@ jobs:
       - name: Guard fleet-managed surfaces
         if: steps.mode.outputs.mode == 'guard'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
           REPO_NAME: ${{ github.event.repository.name }}
         run: |
           if [[ -z "${BASE_SHA}" ]]; then

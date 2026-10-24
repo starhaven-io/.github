@@ -662,6 +662,12 @@ branch remains stale. Compare the executed guard and effective merge tree,
 not just the caller in the PR head. Refresh after sync and recreate the new
 call at the delivered release; never hand-edit established pins to repair it.
 
+Both guards diff the merge tree against the merge commit's first parent, the
+base GitHub actually merged, and the in-tree guard reads its base caller pin
+there. The event's `pull_request.base.sha` is not refreshed when the base
+branch advances, so a branch that predates a sync would otherwise be charged
+with that sync's changes.
+
 The guard reads its hub version from the caller pin in the consumer checkout,
 and in this hub it checks a PR against its own in-tree canon, since a hub PR
 carries the canon it proposes. That hub exemption is enabled only from the

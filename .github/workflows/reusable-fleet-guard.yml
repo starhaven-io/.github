@@ -48,13 +48,30 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Resolve the merged base
+        id: base
+        if: steps.exemption.outputs.exempt != 'true'
+        # The checkout is GitHub's test merge of the head into the current base.
+        # pull_request.base.sha is not refreshed when the base branch advances,
+        # so diffing against it would attribute a newer base, such as a fleet
+        # sync, to the pull request.
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          read -r -a parents <<< "$(git rev-list --parents -n 1 HEAD)"
+          if (( ${#parents[@]} != 3 )) || [[ -z "${HEAD_SHA}" || "${parents[2]}" != "${HEAD_SHA}" ]]; then
+            echo "::error::fleet guard requires the pull request merge commit checkout"
+            exit 1
+          fi
+          echo "sha=${parents[1]}" >> "${GITHUB_OUTPUT}"
+
       - name: Read the caller pin
         id: pin
         if: steps.exemption.outputs.exempt != 'true' && github.repository != 'starhaven-io/.github'
         # The uses: pin is the single source of truth for the hub version;
         # read it from the base tree so a pull request cannot choose canon.
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
         run: |
           if [[ -z "${BASE_SHA}" ]]; then
             echo "::error::fleet guard requires a pull_request base SHA"
@@ -103,7 +120,7 @@ jobs:
       - name: Guard fleet-managed surfaces
         if: steps.exemption.outputs.exempt != 'true'
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
           REPO_NAME: ${{ inputs.repo-name }}
         # A hub pull request carries its canon in-tree, so the hub checks
         # against itself; an older pinned canon would fail every
