@@ -67,17 +67,27 @@ try {
     tag_name: version, draft: false, prerelease: false, published_at: '2020-01-01T00:00:00Z',
     html_url: `https://github.com/EmbarkStudios/cargo-deny/releases/tag/${version}`,
     assets: [
-      { name: `cargo-deny-${version}-x86_64-unknown-linux-musl.tar.gz`, state: 'uploaded', digest: `sha256:${digest}` },
+      {
+        name: `cargo-deny-${version}-x86_64-unknown-linux-musl.tar.gz`, state: 'uploaded', digest: `sha256:${digest}`,
+        created_at: '2020-01-01T00:01:00Z', updated_at: '2020-01-01T00:02:00Z',
+      },
       { name: `cargo-deny-${version}-x86_64-unknown-linux-musl.tar.gz.sha256`, state: 'uploaded', digest: `sha256:${'c'.repeat(64)}` },
       { name: `cargo-deny-${version}-aarch64-unknown-linux-musl.tar.gz`, state: 'uploaded', digest: `sha256:${'d'.repeat(64)}` },
     ],
   });
   const current = release(denyFixture.oldTag, oldDigest);
   const next = release(denyFixture.newTag, newDigest);
+  const withArchive = (metadata, fields) => ({ ...metadata, assets: [{ ...metadata.assets[0], ...fields }, ...metadata.assets.slice(1)] });
   const invalidReleases = [
     { ...next, draft: true },
     { ...next, prerelease: true },
-    { ...next, published_at: null },
+    ...[
+      undefined, null, '', 'not-a-date', '2026-99-99T99:99:99Z', '2023-02-29T00:00:00Z', '2026-04-31T00:00:00Z',
+      '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00+00:00', 123, {}, [],
+    ].flatMap(timestamp => [
+      { ...next, published_at: timestamp },
+      withArchive(next, { updated_at: timestamp }),
+    ]),
     release(`${denyFixture.newTag}-rc.1`, newDigest),
     { ...next, assets: next.assets.slice(1) },
     { ...next, assets: [...next.assets, next.assets[0]] },
@@ -101,7 +111,13 @@ try {
   assert.deepEqual(releases.releases.map(({ version, newDigest }) => [version, newDigest]),
     [[denyFixture.oldTag, oldDigest], [denyFixture.newTag, newDigest]],
     'select the exact archive digest, ignoring sidecars, other platforms and incomplete releases');
-  assert.equal(releases.releases[1].releaseTimestamp, new Date(next.published_at).toISOString(), 'retain the seven-day age gate input');
+  assert.equal(releases.releases[1].releaseTimestamp, '2020-01-01T00:02:00.000Z', 'archive update determines the later timestamp');
+  await writeFile(releaseFile, JSON.stringify([{ ...next, published_at: '2020-01-02T00:00:00Z' }]));
+  assert.equal((await datasource.getReleases(datasourceConfig)).releases[0].releaseTimestamp, '2020-01-02T00:00:00.000Z',
+    'publication wins when the archive timestamp is earlier');
+  await writeFile(releaseFile, JSON.stringify([withArchive(next, { updated_at: '2024-02-29T00:00:00Z' })]));
+  assert.equal((await datasource.getReleases(datasourceConfig)).releases[0].releaseTimestamp, '2024-02-29T00:00:00.000Z',
+    'valid leap-day timestamps remain eligible');
   let lookupIndex = 0;
   const lookup = async (metadata, currentDigest = oldDigest) => {
     const path = join(localDir, `deny-lookup-${lookupIndex++}.json`);
@@ -136,8 +152,18 @@ try {
     [['minor', denyFixture.newTag, newDigest]], 'suppress checksum-only replacements without disabling version updates');
   assert.deepEqual((await lookup([current], 'e'.repeat(64))).updates, [],
     'a replacement archive alone must not produce an update');
-  const fresh = await lookup([current, { ...next, published_at: new Date().toISOString() }]);
-  assert.deepEqual(fresh.updates.filter(update => !update.pendingChecks), [], 'new versions retain the release-age gate');
+  const utc = time => new Date(time).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const now = utc(Date.now());
+  const pending = updates => updates.map(({ updateType, newValue, newDigest, pendingChecks }) => [updateType, newValue, newDigest, pendingChecks]);
+  assert.deepEqual(pending((await lookup([current, { ...next, published_at: now }])).updates),
+    [['minor', denyFixture.newTag, newDigest, true]], 'new versions retain the release-age gate');
+  assert.deepEqual(pending((await lookup([current, withArchive(next, { updated_at: now })])).updates),
+    [['minor', denyFixture.newTag, newDigest, true]], 'a replaced archive restarts the release-age gate');
+  assert.deepEqual(pending((await lookup([current, withArchive(next, { updated_at: utc(Date.now() - 6.5 * 24 * 60 * 60 * 1000) })])).updates),
+    [['minor', denyFixture.newTag, newDigest, true]], 'the seven-day gate counts from the archive update');
+  for (const metadata of invalidReleases) {
+    assert.deepEqual((await lookup([current, metadata])).updates, [], 'ineligible metadata produces no update');
+  }
   const unrelated = await applyPackageRules({ datasource: 'docker', updateType: 'digest', packageRules: preset.packageRules });
   assert.notEqual(unrelated.enabled, false, 'leave other datasources digest updates enabled');
   await writeFile(releaseFile, JSON.stringify(invalidReleases));

@@ -136,13 +136,16 @@ managers cover the x86-64 Linux musl archives; add explicit platform coverage
 before using another archive.
 
 cargo-deny uses a custom datasource that selects the exact Linux archive's
-GitHub API digest and publication timestamp. Its upstream checksum sidecars
-contain only a hash; the locked release-attachments datasource can hash that
-sidecar instead of the archive when updating. Preserve the exact asset match,
-required SHA-256 and timestamp, and exclusion of draft/prerelease releases.
-Checksum-only updates are disabled for this datasource: a changed archive under
-an existing version requires investigation, and the original release timestamp
-cannot establish the replacement archive's age.
+GitHub API digest. Its upstream checksum sidecars contain only a hash; the
+locked release-attachments datasource can hash that sidecar instead of the
+archive when updating. A release is eligible only when its publication time
+and the archive's last update are both strict `YYYY-MM-DDTHH:MM:SSZ`
+timestamps with real calendar dates. The seven-day cooldown starts at the
+later of the two, so an archive replaced after publication restarts it, and
+missing or malformed timestamps fail closed. Preserve the exact asset match,
+required SHA-256 and both timestamps, and exclusion of draft/prerelease
+releases. Checksum-only updates are disabled for this datasource: a changed
+archive under an existing version requires investigation.
 
 Paired Ruby runtimes opt in through canonical `params.ruby-runtime` and scoped
 rendered package rules. The exact builder datasource updates version, checksum
