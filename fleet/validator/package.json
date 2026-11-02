@@ -8,8 +8,8 @@
     "node": "^24.15.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.2",
-    "renovate": "44.178.5"
+    "@biomejs/biome": "2.6.3",
+    "renovate": "44.181.11"
   },
   "allowScripts": {
     "core-js-pure": false,
