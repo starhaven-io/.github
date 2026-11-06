@@ -1238,6 +1238,43 @@ class GuardRegressionsTest < Minitest::Test
     assert_rejects(["guard", guard(repo), "fleet guard: managed surface change rejected"])
   end
 
+  # git reports a detected rename under its destination only, so a moved
+  # managed path must still count as a removal of the source.
+  def test_rejects_renamed_managed_whole_file
+    repo = scenario("renamed-whole-file")
+    git(repo, "mv", ".editorconfig", "editorconfig.txt")
+    commit_all(repo, "move editorconfig")
+    message = "managed surface change rejected (.editorconfig)"
+
+    assert_rejects(
+      ["guard", guard(repo), message],
+      ["consumer guard", consumer_guard(repo), message]
+    )
+  end
+
+  def test_rejects_renamed_fleet_config
+    repo = scenario("renamed-fleet-config")
+    git(repo, "mv", ".fleet.yml", "fleet-config.yml")
+    commit_all(repo, "move fleet config")
+
+    assert_rejects(
+      ["guard", guard(repo), "managed surface change rejected (.fleet.yml)"],
+      ["consumer guard", consumer_guard(repo), ".fleet.yml is hub-owned fleet configuration"]
+    )
+  end
+
+  def test_rejects_renamed_managed_block_host
+    repo = scenario("renamed-block-host")
+    git(repo, "mv", "AGENTS.md", "AGENTS.old.md")
+    commit_all(repo, "move agents")
+    message = "managed surface change rejected (AGENTS.md:commit-and-pr-conventions)"
+
+    assert_rejects(
+      ["guard", guard(repo), message],
+      ["consumer guard", consumer_guard(repo), message]
+    )
+  end
+
   def test_rejects_duplicate_markdown_markers_in_every_mode
     repo = scenario("duplicate-markdown")
     duplicate_block(repo, "AGENTS.md", /^<!-- fleet:block commit-and-pr-conventions -->\n.*?^<!-- fleet:end -->/m,

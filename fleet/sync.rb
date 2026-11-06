@@ -1839,8 +1839,10 @@ class FleetSync
     return @guard_changed_paths if @guard_changed_paths
 
     base = guard_merge_base
+    # A detected rename lists only its destination, which would hide the
+    # removal of the managed source path from every ownership check below.
     stdout, stderr, status = Open3.capture3(
-      "git", "-C", @repo_root.to_s, "diff", "--name-only", "-z", base, "HEAD"
+      "git", "-C", @repo_root.to_s, "diff", "--name-only", "--no-renames", "-z", base, "HEAD"
     )
     raise FleetError, "could not diff guard base: #{stderr.strip}" unless status.success?
 
