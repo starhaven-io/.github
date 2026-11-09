@@ -20,7 +20,9 @@ check:
     run diff git diff --check
     if ! command -v bundle &>/dev/null; then
         skip fleet-bundle "bundle not found" "brew install ruby"
-    elif ! BUNDLE_GEMFILE=fleet/Gemfile bundle check &>/dev/null; then
+    # Frozen so the probe cannot rewrite fleet/Gemfile.lock: the locked
+    # Bundler records its own checksum when it runs from the vendored path.
+    elif ! BUNDLE_GEMFILE=fleet/Gemfile BUNDLE_FROZEN=true bundle check &>/dev/null; then
         skip fleet-bundle "fleet bundle not installed" "BUNDLE_GEMFILE=fleet/Gemfile bundle install"
     else
         run tests env BUNDLE_GEMFILE=fleet/Gemfile bundle exec ruby -e 'Dir["fleet/test/*_test.rb"].sort.each { |file| require File.expand_path(file) }'
