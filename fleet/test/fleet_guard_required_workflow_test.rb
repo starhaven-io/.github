@@ -193,6 +193,16 @@ class FleetGuardRequiredWorkflowTest < Minitest::Test
     assert_includes output, "managed surface change rejected (.editorconfig)"
   end
 
+  def test_rejects_a_managed_file_rename
+    repo = pull_request("managed-file-rename") do |path|
+      File.rename(File.join(path, ".editorconfig"), File.join(path, "editorconfig.txt"))
+    end
+
+    output, status = guard(repo)
+    refute status.success?
+    assert_includes output, "managed surface change rejected (.editorconfig)"
+  end
+
   def test_applies_consumer_ownership_of_fleet_config
     repo = pull_request("fleet-config") do |path|
       File.write(File.join(path, ".fleet.yml"), "# consumer edit\n", mode: "a")
