@@ -261,6 +261,39 @@ class GuardRegressionsTest < Minitest::Test
     end
   end
 
+  def append_invalid_utf8(repo, name)
+    File.open(File.join(repo, name), "ab") { |file| file.write("\nLatin-1 caf\xE9 note.\n".b) }
+  end
+
+  def test_rejects_an_undecodable_block_host_with_a_clear_message
+    repo = scenario("undecodable-host")
+    append_invalid_utf8(repo, "AGENTS.md")
+    commit_all(repo, "add a Latin-1 byte to repo-owned documentation")
+    message = "AGENTS.md is not valid UTF-8"
+
+    results = [["check", sync(repo, "--check")], ["render", sync(repo)],
+               ["guard", guard(repo)], ["consumer guard", consumer_guard(repo)]]
+    assert_rejects(*results.map { |mode, result| [mode, result, message] })
+    results.each { |mode, result| refute_includes result.output, "invalid byte sequence", mode }
+    assert_empty git(repo, "status", "--porcelain").stdout, "render wrote to an undecodable checkout"
+  end
+
+  def test_guard_reports_an_undecodable_base_block_host
+    repo = scenario("undecodable-base-host")
+    append_invalid_utf8(repo, "AGENTS.md")
+    commit_all(repo, "add a Latin-1 byte to repo-owned documentation")
+    base = git(repo, "rev-parse", "HEAD").stdout.strip
+    agents = File.join(repo, "AGENTS.md")
+    File.binwrite(agents, File.binread(agents).sub("caf\xE9".b, "cafe".b))
+    commit_all(repo, "repair the Latin-1 byte")
+    message = "AGENTS.md at #{base} is not valid UTF-8"
+
+    assert_rejects(
+      ["guard", guard(repo), message],
+      ["consumer guard", consumer_guard(repo), message]
+    )
+  end
+
   def test_fixture_git_ignores_an_inherited_linked_worktree_git_dir
     outer = File.join(TMPDIR, "inherited-git-dir")
     linked = File.join(TMPDIR, "inherited-git-dir-worktree")
