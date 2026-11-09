@@ -1872,7 +1872,10 @@ class FleetSync
     )
     return nil unless status.success?
 
-    stdout.force_encoding(Encoding::UTF_8)
+    text = stdout.force_encoding(Encoding::UTF_8)
+    raise FleetError, "#{path} at #{base} is not valid UTF-8" unless text.valid_encoding?
+
+    text
   end
 
   def guard_base_reusable_pins(path)
@@ -2255,7 +2258,10 @@ class FleetSync
   def read_path(path)
     raise FleetError, "#{path} is not a regular file" unless regular_file?(path)
 
-    File.read(path.to_s, encoding: "UTF-8")
+    text = File.read(path.to_s, encoding: "UTF-8")
+    raise FleetError, "#{path} is not valid UTF-8" unless text.valid_encoding?
+
+    text
   end
 
   def write_path(path, content)
