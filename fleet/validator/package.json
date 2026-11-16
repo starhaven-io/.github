@@ -9,7 +9,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.6",
-    "renovate": "44.222.5"
+    "renovate": "44.224.1"
   },
   "allowScripts": {
     "core-js-pure": false,
