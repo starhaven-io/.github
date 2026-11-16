@@ -328,7 +328,7 @@ class GoldenRenderTest < Minitest::Test
 
   def assert_dependabot_policy(entry, name)
     label = "#{name}/#{entry.fetch("package-ecosystem")}"
-    assert_equal({ "interval" => "daily" }, entry.fetch("schedule"), "#{label} must keep the daily schedule")
+    assert_equal({ "interval" => "weekly" }, entry.fetch("schedule"), "#{label} must keep the weekly schedule")
     assert_equal 7, entry.fetch("cooldown").fetch("default-days"), "#{label} must keep the 7-day cooldown"
     assert_equal 1, entry.fetch("groups").length, "#{label} must render exactly one group"
     return unless entry.fetch("package-ecosystem") == "github-actions"
