@@ -497,6 +497,7 @@ surface where it executes. The shared job bodies live in this hub:
 - `reusable-codeql.yml`
 - `reusable-conventional-commits.yml`
 - `reusable-fleet-guard.yml`
+- `reusable-cask-checks.yml`
 
 Pinprick and Midden scan Actions and Rust with `build-mode: none` on
 `ubuntu-24.04`, whose full runner image provides Cargo and rustup. Rust's
@@ -507,6 +508,21 @@ and Cargo configuration. Pinprick also watches the audit catalog consumed by
 `build.rs` and the embedded catalog key. Changes to these settings belong in
 `fleet/repos/` and reach consumers through release/sync; validate the first
 hosted Rust extraction after delivery.
+
+### Homebrew cask delivery
+
+`reusable-cask-checks.yml` waits for the public tap PR at the source branch
+and commit the producer validated. It reads the tap through the caller's
+read-only GitHub token. It prints changes to required checks and GitHub's
+merge state, allows five minutes for checks to appear and waits up to 25
+minutes for a mergeable PR with successful required checks. A skipped or
+neutral required result stops the release. On timeout, the job shows the
+checks observed on the validated commit and the effective branch rules,
+including required workflow paths.
+
+The pinned fleet release must contain both the workflow and
+`fleet/wait_cask_checks.rb`. Once a producer adopts the call, Fleet Guard
+rejects its removal in a producer pull request.
 
 ## Ruby runtime companions
 
