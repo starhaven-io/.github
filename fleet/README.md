@@ -217,6 +217,10 @@ the registry into one large nested document. For example, `starhaven.io` reads
 `fleet/repos/starhaven.io.yml`, and this hub's own config is
 `fleet/repos/.github.yml`.
 
+The registry and each canonical repository config must contain one YAML
+document with unique keys in each mapping. Diagnostics identify the file and
+line of a duplicate and its first definition.
+
 The sync renders that file as the consumer's `.fleet.yml`. The copy stays in
 the consumer so contributors can discover the effective policy without
 visiting the hub, and so the guard can classify surfaces that were managed in

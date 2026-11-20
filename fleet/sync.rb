@@ -455,8 +455,7 @@ class FleetSync
     raise FleetError, non_regular_file_message(relative_path) unless regular_file?(path)
 
     @config_text = read_path(path)
-    validate_config_text(@config_text, relative_path)
-    YAML.safe_load(@config_text, permitted_classes: [], aliases: false)
+    load_canonical_yaml(@config_text, relative_path)
   rescue Psych::Exception => e
     raise FleetError, "#{relative_path} could not be parsed: #{e.message}"
   end
@@ -467,9 +466,7 @@ class FleetSync
     path = hub_path("repos.yml")
     raise FleetError, "fleet/repos.yml is missing" unless regular_file?(path)
 
-    text = read_path(path)
-    validate_config_text(text, "fleet/repos.yml")
-    registry = YAML.safe_load(text, permitted_classes: [], aliases: false)
+    registry = load_canonical_yaml(read_path(path), "fleet/repos.yml")
     raise FleetError, "fleet/repos.yml must be a mapping" unless registry.is_a?(Hash)
 
     reject_unknown_keys(registry, %w[owner repos schema], "fleet/repos.yml")
@@ -540,6 +537,30 @@ class FleetSync
     return unless control_char?(text, allow_lf: true)
 
     raise FleetError, "#{path} must not contain control characters or line separators"
+  end
+
+  def load_canonical_yaml(text, path)
+    validate_config_text(text, path)
+    stream = Psych.parse_stream(text, filename: path)
+    unless stream.children.one?
+      line = (stream.children[1]&.start_line || 0) + 1
+      raise FleetError, "#{path}:#{line}: expected exactly one YAML document"
+    end
+
+    stream.grep(Psych::Nodes::Mapping).each do |mapping|
+      first_lines = {}
+      mapping.children.each_slice(2) do |key, _value|
+        line = key.start_line + 1
+        raise FleetError, "#{path}:#{line}: expected a scalar mapping key" unless key.is_a?(Psych::Nodes::Scalar)
+
+        if (first_line = first_lines[key.value])
+          raise FleetError, "#{path}:#{line}: duplicate key #{key.value.inspect} (first defined on line #{first_line})"
+        end
+
+        first_lines[key.value] = line
+      end
+    end
+    YAML.safe_load(text, permitted_classes: [], aliases: false, filename: path)
   end
 
   def validate_params(params)

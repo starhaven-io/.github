@@ -1942,6 +1942,33 @@ class GuardRegressionsTest < Minitest::Test
       refute sync(repo, "--validate-only").success?, label
     end
   end
+
+  def test_rejects_ambiguous_canonical_yaml_before_rendering
+    repo = scenario("ambiguous-canonical-yaml")
+    config = fleet_config_path(repo)
+    File.write(config, <<~YAML)
+      schema: 1
+      visibility: public
+      license: mit
+      params:
+        dependabot:
+          - package-ecosystem: npm
+            group: npm-dependencies
+            directory: /fleet
+            "directory": /
+    YAML
+    message = 'fleet/repos/.github.yml:9: duplicate key "directory" (first defined on line 8)'
+    assert_rejects(["validate", sync(repo, "--validate-only"), message], ["render", sync(repo), message])
+
+    File.write(config, "#{File.read(config).lines.first(8).join}---\nlicense: none\n")
+    assert_rejects(["validate", sync(repo, "--validate-only"),
+                    "fleet/repos/.github.yml:9: expected exactly one YAML document"])
+
+    registry = File.join(repo, "fleet/repos.yml")
+    File.write(registry, "schema: 1\n#{File.read(registry)}")
+    assert_rejects(["validate", sync(repo, "--validate-only"),
+                    'fleet/repos.yml:2: duplicate key "schema" (first defined on line 1)'])
+  end
 end
 
 class ConventionalCommitsContractTest < Minitest::Test
