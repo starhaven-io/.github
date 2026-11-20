@@ -113,8 +113,8 @@ Top level:
   bundler cache warming for this repository itself.
 
 `.github/workflows/reusable-*.yml`, called by consumers through SHA-pinned
-thin callers: `reusable-codeql.yml`, `reusable-conventional-commits.yml`,
-`reusable-fleet-guard.yml`, `reusable-link-check.yml`,
+thin callers: `reusable-cask-checks.yml`, `reusable-codeql.yml`,
+`reusable-conventional-commits.yml`, `reusable-fleet-guard.yml`, `reusable-link-check.yml`,
 `reusable-pinprick-audit.yml`, and `reusable-zizmor.yml`.
 
 ## Shared Renovate preset
