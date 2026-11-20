@@ -61,6 +61,8 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund --prefix fleet/validator
           echo "FLEET_RENOVATE_VALIDATOR=${GITHUB_WORKSPACE}/fleet/validator/node_modules/.bin/renovate-config-validator" >> "${GITHUB_ENV}"
+          golden_dir=$(mktemp -d "${RUNNER_TEMP}/fleet-golden-renders.XXXXXXXX")
+          echo "FLEET_GOLDEN_RENDER_DIR=${golden_dir}" >> "${GITHUB_ENV}"
 
       - name: Check renderer and templates
         run: |
@@ -105,7 +107,7 @@ jobs:
       - name: Build repository matrix
         id: repos
         run: |
-          ruby -ryaml -rjson -e '
+          ruby -rdigest -ryaml -rjson -e '
             data = YAML.safe_load(File.read("fleet/repos.yml"), permitted_classes: [], aliases: false)
             matrix = {
               include: data.fetch("repos").map do |repo|
@@ -114,11 +116,12 @@ jobs:
                 config = YAML.safe_load(
                   File.read("fleet/repos/#{repo}.yml"), permitted_classes: [], aliases: false
                 )
-                {
-                  repo: repo,
-                  visibility: config.fetch("visibility"),
-                  renovate: config.fetch("params", {}).fetch("renovate", false)
-                }
+                entry = { repo: repo, visibility: config.fetch("visibility") }
+                if config.dig("params", "renovate")
+                  stub = File.join(ENV.fetch("FLEET_GOLDEN_RENDER_DIR"), "consumer-#{repo}", "renovate.json")
+                  entry[:renovate_sha256] = Digest::SHA256.file(stub).hexdigest
+                end
+                entry
               end
             }
             File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |file| file.puts("matrix=#{JSON.generate(matrix)}") }
@@ -172,39 +175,6 @@ jobs:
           echo "::error::public fleet consumer ${REPO_NAME} could not be checked out"
           exit 1
 
-      - name: Set up Node for Renovate validation
-        if: steps.clone.outcome == 'success' && matrix.renovate
-        # Held at v6 until pinprick's source scan covers setup-node v7.
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 24
-          check-latest: true
-          package-manager-cache: false
-
-      # 24.22.1 is the lowest Node 24 release with the October 2026 security
-      # fixes. A failed manifest lookup can reuse an older cached runtime.
-      - name: Verify Node runtime
-        if: steps.clone.outcome == 'success' && matrix.renovate
-        run: |
-          node --version
-          node --input-type=commonjs <<'NODE'
-          const assert = require("node:assert/strict");
-          const version = process.versions.node;
-          const parts = version.split(".").map(Number);
-          assert(parts.length === 3 && parts.every(part => Number.isSafeInteger(part) && part >= 0)
-            && parts.join(".") === version, `Expected a stable Node version, got ${version}`);
-          const [major, minor, patch] = parts;
-          assert(major === 24 && (minor > 22 || (minor === 22 && patch >= 1)),
-            `Expected Node 24 >= 24.22.1, got ${version}`);
-          NODE
-
-      - name: Install Renovate validator
-        if: steps.clone.outcome == 'success' && matrix.renovate
-        env:
-          npm_config_cache: ${{ runner.temp }}/renovate-npm-cache
-          npm_config_registry: https://registry.npmjs.org/
-        run: npm ci --ignore-scripts --no-audit --no-fund --prefix hub/fleet/validator
-
       - name: Render and require idempotence
         if: steps.clone.outcome == 'success'
         env:
@@ -244,9 +214,8 @@ jobs:
             --workdir /workspace "${ZIZMOR_IMAGE}" \
             --offline --strict-collection --persona auditor -- "${workflow_paths[@]}"
 
-      - name: Validate rendered Renovate stub
-        if: steps.clone.outcome == 'success' && matrix.renovate
-        working-directory: ${{ runner.temp }}
-        run: >-
-          "${GITHUB_WORKSPACE}/hub/fleet/validator/node_modules/.bin/renovate-config-validator"
-          --strict --no-global "${GITHUB_WORKSPACE}/repo/renovate.json"
+      - name: Compare rendered Renovate stub with validated golden render
+        if: steps.clone.outcome == 'success' && matrix.renovate_sha256
+        env:
+          EXPECTED_SHA256: ${{ matrix.renovate_sha256 }}
+        run: printf '%s  repo/renovate.json\n' "${EXPECTED_SHA256}" | sha256sum -c -
