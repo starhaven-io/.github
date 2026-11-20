@@ -439,8 +439,7 @@ class FleetSync
 
     # Only surfaces this pull request touched can fail it; drift that
     # predates the branch belongs to the sync, not to the author.
-    touched = guard_changed_paths
-    flagged = @changes.select { |changed_surface| touched.include?(changed_surface.path) }
+    flagged = @changes & managed_changes
     raise FleetError, guard_failure_message(flagged) if flagged.any?
   end
 
