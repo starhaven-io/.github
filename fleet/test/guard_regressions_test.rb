@@ -755,6 +755,25 @@ class GuardRegressionsTest < Minitest::Test
     assert_sync_success(guard(repo))
   end
 
+  def test_allows_repo_owned_readme_edits_and_canonical_calls_during_block_rollout
+    repo = scenario("guard-block-rollout")
+    config = fleet_config(repo)
+    config.fetch("params").fetch("readme").fetch("license")["text"] = "Updated license wording."
+    write_fleet_config(repo, config)
+    commit_all(repo, "update hub canon before consumer sync")
+    base = git(repo, "rev-parse", "HEAD").stdout.strip
+
+    readme = File.join(repo, "README.md")
+    File.open(readme, "a") { |file| file.puts("\nMore project documentation.") }
+    write_ci_workflow(repo, reusable_workflow_line(repo))
+    commit_all(repo, "document a new canonical workflow call")
+    assert_sync_success(consumer_guard(repo, base:))
+
+    File.write(readme, File.read(readme).sub("## License\n", "## Terms\n"))
+    commit_all(repo, "edit the managed license block")
+    assert_rejects(["guard", consumer_guard(repo, base:), "README.md:license-section"])
+  end
+
   def test_lists_only_fully_rendered_workflows
     repo = scenario("list-managed-workflows")
     write_ci_workflow(repo, reusable_workflow_line(repo))
