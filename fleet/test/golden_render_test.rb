@@ -197,7 +197,7 @@ class GoldenRenderTest < Minitest::Test
   end
 
   def assert_golden_render(name)
-    repo_root = File.join(GOLDEN_TMPDIR, "consumer-#{name}")
+    repo_root = File.join(ENV.fetch("FLEET_GOLDEN_RENDER_DIR", GOLDEN_TMPDIR), "consumer-#{name}")
     FileUtils.mkdir_p(repo_root)
     write_skeleton(repo_root, name)
 

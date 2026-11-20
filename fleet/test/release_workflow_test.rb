@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "digest"
 require "fileutils"
 require "json"
 require "minitest/autorun"
@@ -366,12 +367,26 @@ class ReleaseWorkflowTest < Minitest::Test
     end
   end
 
-  def test_validator_installs_never_run_dependency_lifecycle_scripts
+  def test_validator_installs_once_without_running_dependency_lifecycle_scripts
     prepare = step(@validate, "prepare", "Install Renovate validator").fetch("run")
-    dry_run = step(@validate, "dry-run", "Install Renovate validator").fetch("run")
-
+    dry_run = @validate.fetch("jobs").fetch("dry-run").fetch("steps")
     assert_includes prepare, "npm ci --ignore-scripts"
-    assert_includes dry_run, "npm ci --ignore-scripts"
+    refute(dry_run.any? { |item| item["run"]&.include?("npm ci") })
+  end
+
+  def test_consumer_renovate_stub_must_match_validated_golden_bytes
+    compare = step(@validate, "dry-run", "Compare rendered Renovate stub with validated golden render")
+    assert_equal "${{ matrix.renovate_sha256 }}", compare.fetch("env").fetch("EXPECTED_SHA256")
+    Dir.mktmpdir("fleet-renovate-digest-") do |directory|
+      FileUtils.mkdir_p(File.join(directory, "repo"))
+      path = File.join(directory, "repo/renovate.json")
+      File.write(path, "{}\n")
+      env = { "EXPECTED_SHA256" => Digest::SHA256.file(path).hexdigest }
+      assert run_bash(compare.fetch("run"), cwd: directory, env:).last.success?
+
+      File.write(path, "{}")
+      refute run_bash(compare.fetch("run"), cwd: directory, env:).last.success?
+    end
   end
 
   def test_pull_request_identity_readback_is_bounded_and_retried

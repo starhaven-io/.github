@@ -50,8 +50,8 @@ completion once those dependencies are installed.
 
 The validator uses Node 24 because the locked Renovate package supports that
 major. Its `engines.node` requirement also covers the locked optional native
-toolchain. Both validator CI jobs select Node 24; use a compatible Node 24
-runtime locally while keeping Node 26 for the other fleet npm projects.
+toolchain. Use a compatible Node 24 runtime for local validator checks and
+Node 26 for the other fleet npm projects.
 Revisit this exception when the locked Renovate package supports Node 26 and
 the validator checks pass on that major.
 
@@ -554,7 +554,9 @@ writer for their root `renovate.json`, including the load-bearing Merge
 Confidence opt-out, and pins the shared preset by immutable fleet release tag.
 The fleet validation workflow uses the exact Renovate version declared in
 `fleet/validator/package.json` for strict, no-global validation of the preset
-and each rendered adopter stub. Zizmor audits every hub workflow and each
+and each adopter's golden-rendered stub. Each readable consumer's dry run
+compares its rendered stub with the SHA-256 of those validated bytes. Zizmor
+audits every hub workflow and each
 consumer workflow whose complete contents the fleet renders with
 `--strict-collection`, so syntax and schema failures fail validation; unrelated
 repo-owned workflows remain the consumer's own CI responsibility. The shared
